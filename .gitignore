@@ -1,0 +1,20 @@
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Virtual environment
+.venv/
+venv/
+
+# Logs and runs
+runs/
+output/
+*.log
+
+# Model artifacts
+models/*.pt
+models/*.onnx
+
+# OS files
+.DS_Store
+Thumbs.db
