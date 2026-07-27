@@ -10,6 +10,8 @@ from pathlib import Path
 import cv2
 from ultralytics import YOLO
 
+from firebase_config import save_detection
+
 
 MODEL_PATH = Path("models/best.pt")
 IMAGES_DIR = Path("images")
@@ -75,6 +77,13 @@ def main() -> None:
                 class_name = model.names[class_id]
                 confidence = float(box.conf[0])
                 print(f"  {class_name} {confidence:.2f}")
+                save_detection(
+                    class_name=class_name,
+                    confidence=confidence,
+                    image_name=image_path.name,
+                    image_path=str(image_path),
+                    source="image"
+                )
 
         if not detections_found:
             print("  (no objects detected)")

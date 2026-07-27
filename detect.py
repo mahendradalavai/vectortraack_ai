@@ -1,4 +1,4 @@
-﻿"""Run YOLO video inference for VectorTrack AI.
+"""Run YOLO video inference for VectorTrack AI.
 
 Loads the trained model from ``models/best.pt``, runs detection on a video
 in ``videos/``, prints a summary, and saves the annotated output to ``output/``.
@@ -8,6 +8,8 @@ from collections import Counter
 from pathlib import Path
 
 from ultralytics import YOLO
+
+from firebase_config import save_detection
 
 
 MODEL_PATH = Path("models/best.pt")
@@ -58,6 +60,7 @@ def main() -> None:
     # Run inference frame by frame and save the annotated video.
     results = model.predict(
         source=str(video_path),
+        stream=True,
         save=True,
         project=str(OUTPUT_DIR),
         name="video_detection",
@@ -68,7 +71,7 @@ def main() -> None:
     detection_counts: Counter[str] = Counter()
     frames_with_detections = 0
 
-    for result in results:
+    for frame_idx, result in enumerate(results, start=1):
         boxes = result.boxes
         if boxes is None or len(boxes) == 0:
             continue
@@ -78,7 +81,14 @@ def main() -> None:
             class_name = model.names[int(box.cls[0])]
             confidence = float(box.conf[0])
             detection_counts[class_name] += 1
-            print(f"  Frame {result.frame + 1}: {class_name} {confidence:.2f}")
+            print(f"  Frame {frame_idx}: {class_name} {confidence:.2f}")
+            save_detection(
+                class_name=class_name,
+                confidence=confidence,
+                image_name=f"frame_{frame_idx}.jpg",
+                image_path=str(video_path),
+                source="video"
+            )
 
     output_video = OUTPUT_DIR / "video_detection" / video_path.name
 

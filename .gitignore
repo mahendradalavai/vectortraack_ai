@@ -14,7 +14,17 @@ output/
 # Model artifacts
 models/*.pt
 models/*.onnx
+*.pt
 
 # OS files
 .DS_Store
 Thumbs.db
+
+# Sensitive credentials
+serviceAccountKey.json
+
+# Local runtime uploaded / result files
+uploads/
+results/
+.freebuff/
+
