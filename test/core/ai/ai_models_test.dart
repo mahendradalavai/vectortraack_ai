@@ -1,0 +1,134 @@
+import 'package:flutter_test/flutter_test.dart';
+
+import 'package:kitten/core/ai/config/ai_config.dart';
+import 'package:kitten/core/ai/models/ai_exception.dart';
+import 'package:kitten/core/ai/models/chat_message.dart';
+import 'package:kitten/core/ai/models/chat_request.dart';
+import 'package:kitten/core/ai/models/chat_response.dart';
+import 'package:kitten/core/ai/prompts/kitten_system_prompt.dart';
+
+void main() {
+  group('AI Models & Prompts', () {
+    test('ChatMessage creates user, assistant, and system messages correctly', () {
+      final userMsg = ChatMessage.user('Hello');
+      expect(userMsg.role, ChatRole.user);
+      expect(userMsg.isUser, isTrue);
+      expect(userMsg.content, 'Hello');
+
+      final assistantMsg = ChatMessage.assistant('Meow! How can I help?');
+      expect(assistantMsg.role, ChatRole.assistant);
+      expect(assistantMsg.isAssistant, isTrue);
+
+      final sysMsg = ChatMessage.system('System instruction');
+      expect(sysMsg.role, ChatRole.system);
+      expect(sysMsg.isSystem, isTrue);
+
+      final json = userMsg.toJson();
+      expect(json['role'], 'user');
+      expect(json['content'], 'Hello');
+
+      final parsed = ChatMessage.fromJson(json);
+      expect(parsed.role, ChatRole.user);
+      expect(parsed.content, 'Hello');
+    });
+
+    test('ChatRequest formats payload with default and custom model', () {
+      final requestWithDefault = ChatRequest(
+        messages: [ChatMessage.user('Hi')],
+      );
+      final jsonDefault = requestWithDefault.toJson(
+        defaultModel: AiConfig.defaultModel,
+      );
+      expect(jsonDefault['model'], AiConfig.defaultModel);
+      expect(jsonDefault['messages'], isList);
+      expect((jsonDefault['messages'] as List).length, 1);
+
+      final requestWithCustom = ChatRequest(
+        messages: [ChatMessage.user('Hi')],
+        model: 'custom-model',
+      );
+      final jsonCustom = requestWithCustom.toJson(
+        defaultModel: AiConfig.defaultModel,
+      );
+      expect(jsonCustom['model'], 'custom-model');
+    });
+
+    test('ChatResponse parses standard Groq JSON response', () {
+      final mockGroqJson = {
+        'id': 'chatcmpl-test',
+        'object': 'chat.completion',
+        'model': 'openai/gpt-oss-20b',
+        'choices': [
+          {
+            'index': 0,
+            'message': {
+              'role': 'assistant',
+              'content': 'Purr! Hello there!',
+            },
+            'finish_reason': 'stop',
+          }
+        ],
+        'usage': {
+          'prompt_tokens': 12,
+          'completion_tokens': 8,
+          'total_tokens': 20,
+        }
+      };
+
+      final response = ChatResponse.fromGroqJson(mockGroqJson);
+      expect(response.content, 'Purr! Hello there!');
+      expect(response.model, 'openai/gpt-oss-20b');
+      expect(response.finishReason, 'stop');
+      expect(response.totalTokens, 20);
+    });
+
+    test('ChatResponse throws FormatException on empty choices', () {
+      final emptyJson = {
+        'model': 'openai/gpt-oss-20b',
+        'choices': <dynamic>[],
+      };
+
+      expect(
+        () => ChatResponse.fromGroqJson(emptyJson),
+        throwsA(isA<FormatException>()),
+      );
+    });
+
+    test('AiException provides safe user-friendly messages without credentials', () {
+      final missingKey = AiException.missingApiKey();
+      expect(missingKey.type, AiErrorType.missingApiKey);
+      expect(missingKey.userFriendlyMessage, contains('Groq API key is not configured'));
+
+      final invalidKey = AiException.invalidApiKey();
+      expect(invalidKey.type, AiErrorType.invalidApiKey);
+      expect(invalidKey.userFriendlyMessage, contains('rejected'));
+
+      final network = AiException.networkUnavailable('SocketException');
+      expect(network.type, AiErrorType.networkUnavailable);
+      expect(network.userFriendlyMessage, contains('internet connection'));
+
+      final timeout = AiException.timeout();
+      expect(timeout.type, AiErrorType.timeout);
+      expect(timeout.userFriendlyMessage, contains('timed out'));
+
+      // Ensure no raw secret is leaked in toString
+      expect(invalidKey.toString(), isNot(contains('sk-')));
+      expect(invalidKey.toString(), isNot(contains('gsk_')));
+    });
+
+    test('KittenSystemPrompt explicitly restricts phone and background features', () {
+      final prompt = KittenSystemPrompt.prompt;
+      expect(prompt, contains('Kitten'));
+      expect(prompt, contains('phone'));
+      expect(prompt, contains('alarms'));
+      expect(prompt, contains('calls'));
+      expect(prompt, contains('CRITICAL SCOPE CONSTRAINTS'));
+    });
+
+    test('AiConfig has valid default and supported models', () {
+      expect(AiConfig.defaultModel, 'openai/gpt-oss-20b');
+      expect(AiConfig.availableModels, contains(AiConfig.defaultModel));
+      expect(AiConfig.availableModels, contains('openai/gpt-oss-safeguard-20b'));
+    });
+  });
+}
