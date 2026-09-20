@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:kitten/core/ai/services/chat_service.dart';
 import 'package:kitten/core/constants/app_constants.dart';
 import 'package:kitten/core/models/assistant_state.dart';
+import 'package:kitten/core/voice/services/voice_controller.dart';
 import 'package:kitten/features/home/presentation/widgets/chat_bubble.dart';
 import 'package:kitten/features/kitten/presentation/widgets/kitten_avatar.dart';
 import 'package:kitten/features/settings/presentation/pages/settings_page.dart';
@@ -13,50 +14,91 @@ import 'package:kitten/shared/widgets/assistant_status_indicator.dart';
 /// Integrates the Kitten avatar, status indicator, voice placeholder,
 /// text conversation history, and text input field connected to the AI provider.
 class HomePage extends StatefulWidget {
-  const HomePage({super.key, this.chatService});
+  const HomePage({super.key, this.voiceController});
 
-  /// Optional injected [ChatService] for testing and dependency injection.
-  final ChatService? chatService;
+  /// Optional injected [VoiceController] for testing and dependency injection.
+  ///
+  /// It also supplies the [ChatService] used for the text conversation.
+  final VoiceController? voiceController;
 
   @override
   State<HomePage> createState() => _HomePageState();
 }
 
-class _HomePageState extends State<HomePage> {
+class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
+  late final VoiceController _voice;
   late final ChatService _chatService;
   final TextEditingController _textController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
 
+  /// The last voice problem already shown, so it is not repeated.
+  String? _shownVoiceError;
+
   @override
   void initState() {
     super.initState();
-    _chatService = widget.chatService ?? ChatService();
-    _chatService.addListener(_onChatServiceUpdate);
+    _voice = widget.voiceController ?? VoiceController();
+    _chatService = _voice.chatService;
+    _voice.addListener(_onVoiceUpdate);
+    WidgetsBinding.instance.addObserver(this);
   }
 
   @override
   void dispose() {
-    _chatService.removeListener(_onChatServiceUpdate);
-    if (widget.chatService == null) {
-      _chatService.dispose();
+    WidgetsBinding.instance.removeObserver(this);
+    _voice.removeListener(_onVoiceUpdate);
+    if (widget.voiceController == null) {
+      _voice.dispose();
     }
     _textController.dispose();
     _scrollController.dispose();
     super.dispose();
   }
 
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Never hold the microphone while the app is not in the foreground.
+    if (state != AppLifecycleState.resumed && _voice.isActive) {
+      _voice.stop();
+    }
+  }
+
   /// True while Kitten is thinking or streaming a reply.
   bool get _isBusy =>
       _chatService.isStreaming ||
-      _chatService.assistantState == AssistantState.thinking;
+      _voice.assistantState == AssistantState.thinking;
 
-  void _onChatServiceUpdate() {
-    if (mounted) {
-      setState(() {});
-      // Streaming updates arrive per token, so jump instead of animating to
-      // avoid fighting a never-ending scroll animation.
-      _scrollToBottom(animate: !_chatService.isStreaming);
+  void _onVoiceUpdate() {
+    if (!mounted) return;
+
+    setState(() {});
+    // Streaming updates arrive per token, so jump instead of animating to
+    // avoid fighting a never-ending scroll animation.
+    _scrollToBottom(animate: !_chatService.isStreaming);
+    _maybeShowVoiceError();
+  }
+
+  /// Surfaces a new voice problem once, without nagging on every rebuild.
+  void _maybeShowVoiceError() {
+    final error = _voice.voiceError;
+    if (error == null) {
+      _shownVoiceError = null;
+      return;
     }
+    if (error == _shownVoiceError) return;
+
+    _shownVoiceError = error;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(error),
+        backgroundColor: Theme.of(context).colorScheme.error,
+        duration: const Duration(seconds: 3),
+      ),
+    );
+  }
+
+  Future<void> _toggleVoice() async {
+    await _voice.toggle();
   }
 
   void _scrollToBottom({bool animate = true}) {
@@ -80,6 +122,11 @@ class _HomePageState extends State<HomePage> {
     final text = _textController.text.trim();
     if (text.isEmpty || _chatService.isStreaming || _isBusy) {
       return;
+    }
+
+    // Typing takes over from the hands-free loop.
+    if (_voice.isActive) {
+      await _voice.stop();
     }
 
     _textController.clear();
@@ -110,16 +157,6 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  void _onMicPressed() {
-    // Placeholder — will be implemented in a future voice-input task.
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('Voice input will be enabled in a future update.'),
-        duration: Duration(seconds: 2),
-      ),
-    );
-  }
-
   void _openSettings() {
     Navigator.of(context).push(
       MaterialPageRoute<void>(builder: (_) => const SettingsPage()),
@@ -130,7 +167,7 @@ class _HomePageState extends State<HomePage> {
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     final tt = Theme.of(context).textTheme;
-    final state = _chatService.assistantState;
+    final state = _voice.assistantState;
     final messages = _chatService.messages;
     final isThinking = state == AssistantState.thinking;
     final isStreaming = _chatService.isStreaming;
@@ -207,9 +244,14 @@ class _HomePageState extends State<HomePage> {
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
                       FilledButton.tonalIcon(
-                        onPressed: _onMicPressed,
-                        icon: const Icon(Icons.mic, size: 18),
-                        label: const Text('Talk'),
+                        onPressed: _toggleVoice,
+                        icon: Icon(
+                          _voice.isActive
+                              ? Icons.stop_circle_outlined
+                              : Icons.mic,
+                          size: 18,
+                        ),
+                        label: Text(_voice.isActive ? 'Stop' : 'Talk'),
                       ),
                       const SizedBox(width: 12),
                       AssistantStatusIndicator(state: state),
