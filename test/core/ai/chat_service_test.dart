@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:kitten/core/ai/models/ai_exception.dart';
@@ -13,11 +15,14 @@ class FakeAiProvider implements AiProvider {
   FakeAiProvider({
     this.responseToReturn = 'Meow! How are you?',
     this.shouldThrow,
+    this.streamChunks,
   });
 
   String responseToReturn;
   Exception? shouldThrow;
+  List<String>? streamChunks;
   ChatRequest? lastRequest;
+  bool disposed = false;
 
   @override
   String get providerName => 'FakeProvider';
@@ -35,13 +40,56 @@ class FakeAiProvider implements AiProvider {
   }
 
   @override
+  Stream<String> streamMessage(ChatRequest request) async* {
+    lastRequest = request;
+    if (shouldThrow != null) {
+      throw shouldThrow!;
+    }
+    final chunks = streamChunks ?? [responseToReturn];
+    for (final chunk in chunks) {
+      yield chunk;
+    }
+  }
+
+  @override
   Future<bool> checkConnection() async {
     if (shouldThrow != null) {
       throw shouldThrow!;
     }
     return true;
   }
+
+  @override
+  void dispose() {
+    disposed = true;
+  }
 }
+
+/// A provider whose stream is driven manually, so tests can interleave
+/// cancellation with incoming deltas.
+class ControlledStreamProvider implements AiProvider {
+  final StreamController<String> controller = StreamController<String>();
+
+  @override
+  String get providerName => 'ControlledProvider';
+
+  @override
+  Future<ChatResponse> sendMessage(ChatRequest request) async =>
+      const ChatResponse(content: '', model: 'controlled');
+
+  @override
+  Stream<String> streamMessage(ChatRequest request) => controller.stream;
+
+  @override
+  Future<bool> checkConnection() async => true;
+
+  @override
+  void dispose() {
+    controller.close();
+  }
+}
+
+Future<void> _settle() => Future<void>.delayed(const Duration(milliseconds: 5));
 
 void main() {
   group('ChatService', () {
@@ -50,6 +98,9 @@ void main() {
       expect(service.assistantState, AssistantState.idle);
       expect(service.messages, isEmpty);
       expect(service.lastError, isNull);
+      expect(service.lastErrorType, isNull);
+      expect(service.isStreaming, isFalse);
+      expect(service.streamingMessage, isNull);
     });
 
     test('sendMessage prepends system prompt and updates state to idle after response', () async {
@@ -104,6 +155,144 @@ void main() {
       expect(service.messages, isEmpty);
       expect(service.lastError, isNull);
       expect(service.assistantState, AssistantState.idle);
+    });
+
+    // ── Streaming ───────────────────────────────────────────────
+
+    test('sendMessageStreaming accumulates deltas into one assistant message', () async {
+      final fakeProvider = FakeAiProvider(
+        streamChunks: ['Meow', '! I am ', 'Kitten'],
+      );
+      final service = ChatService(provider: fakeProvider);
+
+      final states = <AssistantState>[];
+      service.addListener(() => states.add(service.assistantState));
+
+      final result = await service.sendMessageStreaming('Hi');
+
+      expect(result, isNotNull);
+      expect(result!.content, 'Meow! I am Kitten');
+      expect(service.messages.length, 2);
+      expect(service.messages[1].content, 'Meow! I am Kitten');
+      expect(service.assistantState, AssistantState.idle);
+      expect(service.isStreaming, isFalse);
+      expect(service.streamingMessage, isNull);
+      expect(states, contains(AssistantState.thinking));
+    });
+
+    test('sendMessageStreaming exposes a live partial message while streaming', () async {
+      final fakeProvider = FakeAiProvider(streamChunks: ['Hel', 'lo']);
+      final service = ChatService(provider: fakeProvider);
+
+      // Mirrors the UI, which only renders non-empty partials.
+      final partials = <String>[];
+      service.addListener(() {
+        final partial = service.streamingMessage;
+        if (partial != null && partial.content.isNotEmpty) {
+          partials.add(partial.content);
+        }
+      });
+
+      await service.sendMessageStreaming('Hi');
+
+      expect(partials, ['Hel', 'Hello']);
+    });
+
+    test('sendMessageStreaming records typed error on provider failure', () async {
+      final fakeProvider = FakeAiProvider(
+        shouldThrow: AiException.invalidApiKey(),
+      );
+      final service = ChatService(provider: fakeProvider);
+
+      final result = await service.sendMessageStreaming('Hi');
+
+      expect(result, isNull);
+      expect(service.lastErrorType, AiErrorType.invalidApiKey);
+      expect(service.lastErrorRequiresSettings, isTrue);
+      expect(service.isStreaming, isFalse);
+      expect(service.streamingMessage, isNull);
+      expect(service.assistantState, AssistantState.idle);
+      // Only the user message remains.
+      expect(service.messages.length, 1);
+    });
+
+    test('cancelStreaming keeps already-received text and ends the turn', () async {
+      final provider = ControlledStreamProvider();
+      final service = ChatService(provider: provider);
+
+      final future = service.sendMessageStreaming('Hi');
+      await _settle();
+
+      provider.controller.add('Partial');
+      await _settle();
+      expect(service.isStreaming, isTrue);
+      expect(service.streamingMessage?.content, 'Partial');
+
+      service.cancelStreaming();
+      provider.controller.add(' and more');
+      await _settle();
+
+      final result = await future;
+
+      expect(result, isNotNull);
+      expect(result!.content, 'Partial');
+      expect(service.isStreaming, isFalse);
+      expect(service.messages.last.content, 'Partial');
+      expect(service.assistantState, AssistantState.idle);
+
+      await provider.controller.close();
+    });
+
+    test('dispose releases the underlying provider', () {
+      final fakeProvider = FakeAiProvider();
+      final service = ChatService(provider: fakeProvider);
+
+      service.dispose();
+
+      expect(fakeProvider.disposed, isTrue);
+    });
+  });
+
+  group('ChatService error classification', () {
+    Future<ChatService> failingWith(AiException error) async {
+      final service = ChatService(provider: FakeAiProvider(shouldThrow: error));
+      await service.sendMessage('Hi');
+      return service;
+    }
+
+    test('missing or invalid keys require the Settings action', () async {
+      final missing = await failingWith(AiException.missingApiKey());
+      expect(missing.lastErrorType, AiErrorType.missingApiKey);
+      expect(missing.lastErrorRequiresSettings, isTrue);
+
+      final invalid = await failingWith(AiException.invalidApiKey());
+      expect(invalid.lastErrorType, AiErrorType.invalidApiKey);
+      expect(invalid.lastErrorRequiresSettings, isTrue);
+    });
+
+    test('transient errors do not require the Settings action', () async {
+      final timeout = await failingWith(AiException.timeout());
+      expect(timeout.lastErrorType, AiErrorType.timeout);
+      expect(timeout.lastErrorRequiresSettings, isFalse);
+
+      final rateLimited = await failingWith(AiException.rateLimited());
+      expect(rateLimited.lastErrorType, AiErrorType.rateLimited);
+      expect(rateLimited.lastErrorRequiresSettings, isFalse);
+    });
+
+    test('a successful turn clears any previous typed error', () async {
+      final provider = FakeAiProvider(shouldThrow: AiException.timeout());
+      final service = ChatService(provider: provider);
+
+      await service.sendMessage('Hi');
+      expect(service.lastErrorType, AiErrorType.timeout);
+
+      provider.shouldThrow = null;
+      await service.sendMessage('Hi again');
+
+      expect(service.lastError, isNull);
+      expect(service.lastErrorType, isNull);
+      expect(service.lastErrorRequiresSettings, isFalse);
     });
   });
 }

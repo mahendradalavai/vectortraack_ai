@@ -45,50 +45,69 @@ class _HomePageState extends State<HomePage> {
     super.dispose();
   }
 
+  /// True while Kitten is thinking or streaming a reply.
+  bool get _isBusy =>
+      _chatService.isStreaming ||
+      _chatService.assistantState == AssistantState.thinking;
+
   void _onChatServiceUpdate() {
     if (mounted) {
       setState(() {});
-      _scrollToBottom();
+      // Streaming updates arrive per token, so jump instead of animating to
+      // avoid fighting a never-ending scroll animation.
+      _scrollToBottom(animate: !_chatService.isStreaming);
     }
   }
 
-  void _scrollToBottom() {
+  void _scrollToBottom({bool animate = true}) {
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (_scrollController.hasClients) {
+      if (!_scrollController.hasClients) return;
+
+      final target = _scrollController.position.maxScrollExtent;
+      if (animate) {
         _scrollController.animateTo(
-          _scrollController.position.maxScrollExtent,
+          target,
           duration: const Duration(milliseconds: 300),
           curve: Curves.easeOut,
         );
+      } else {
+        _scrollController.jumpTo(target);
       }
     });
   }
 
   Future<void> _handleSendMessage() async {
     final text = _textController.text.trim();
-    if (text.isEmpty || _chatService.assistantState == AssistantState.thinking) {
+    if (text.isEmpty || _chatService.isStreaming || _isBusy) {
       return;
     }
 
     _textController.clear();
-    await _chatService.sendMessage(text);
+    await _chatService.sendMessageStreaming(text);
 
     if (mounted && _chatService.lastError != null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(_chatService.lastError!),
-          backgroundColor: Theme.of(context).colorScheme.error,
-          action: _chatService.lastError!.contains('Settings')
-              ? SnackBarAction(
-                  label: 'Settings',
-                  textColor: Theme.of(context).colorScheme.onError,
-                  onPressed: _openSettings,
-                )
-              : null,
-          duration: const Duration(seconds: 4),
-        ),
-      );
+      _showErrorSnackBar(_chatService.lastError!);
     }
+  }
+
+  void _showErrorSnackBar(String message) {
+    final cs = Theme.of(context).colorScheme;
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: cs.error,
+        // Decided from the typed error, not by matching message text.
+        action: _chatService.lastErrorRequiresSettings
+            ? SnackBarAction(
+                label: 'Settings',
+                textColor: cs.onError,
+                onPressed: _openSettings,
+              )
+            : null,
+        duration: const Duration(seconds: 4),
+      ),
+    );
   }
 
   void _onMicPressed() {
@@ -114,6 +133,8 @@ class _HomePageState extends State<HomePage> {
     final state = _chatService.assistantState;
     final messages = _chatService.messages;
     final isThinking = state == AssistantState.thinking;
+    final isStreaming = _chatService.isStreaming;
+    final streamingMessage = _chatService.streamingMessage;
 
     return Scaffold(
       body: SafeArea(
@@ -235,7 +256,12 @@ class _HomePageState extends State<HomePage> {
                     )
                   else ...[
                     ...messages.map((m) => ChatBubble(message: m)),
-                    if (isThinking)
+                    // Show Kitten's reply as it is being generated.
+                    if (isStreaming &&
+                        streamingMessage != null &&
+                        streamingMessage.content.isNotEmpty)
+                      ChatBubble(message: streamingMessage)
+                    else if (isThinking)
                       Padding(
                         padding: const EdgeInsets.symmetric(vertical: 8),
                         child: Row(
@@ -329,18 +355,22 @@ class _HomePageState extends State<HomePage> {
                     ),
                     const SizedBox(width: 8),
                     IconButton.filled(
-                      onPressed: isThinking ? null : _handleSendMessage,
-                      icon: isThinking
-                          ? const SizedBox(
-                              width: 18,
-                              height: 18,
-                              child: CircularProgressIndicator(
-                                strokeWidth: 2,
-                                color: Colors.white,
-                              ),
-                            )
-                          : const Icon(Icons.send, size: 20),
-                      tooltip: 'Send message',
+                      onPressed: isStreaming
+                          ? _chatService.cancelStreaming
+                          : (isThinking ? null : _handleSendMessage),
+                      icon: isStreaming
+                          ? const Icon(Icons.stop, size: 20)
+                          : (isThinking
+                              ? const SizedBox(
+                                  width: 18,
+                                  height: 18,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    color: Colors.white,
+                                  ),
+                                )
+                              : const Icon(Icons.send, size: 20)),
+                      tooltip: isStreaming ? 'Stop response' : 'Send message',
                     ),
                   ],
                 ),

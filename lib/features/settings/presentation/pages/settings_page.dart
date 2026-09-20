@@ -44,6 +44,16 @@ class _SettingsPageState extends State<SettingsPage> {
     _loadSettings();
   }
 
+  @override
+  void dispose() {
+    // Only close the provider we created ourselves; an injected one is owned
+    // by the caller.
+    if (widget.groqProvider == null) {
+      _groqProvider.dispose();
+    }
+    super.dispose();
+  }
+
   Future<void> _loadSettings() async {
     final key = await _storage.getGroqApiKey();
     final model = await _storage.getSelectedModel();

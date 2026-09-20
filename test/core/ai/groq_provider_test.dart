@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -10,6 +11,57 @@ import 'package:kitten/core/ai/models/chat_request.dart';
 import 'package:kitten/core/ai/providers/groq_provider.dart';
 
 import '../services/secure_storage_service_test.dart';
+
+/// A fake HTTP client that returns a chunked server-sent-event body, so the
+/// streaming parser can be exercised with realistic, split network frames.
+class _SseMockClient extends http.BaseClient {
+  _SseMockClient({
+    this.chunks = const [],
+    this.statusCode = 200,
+    this.body = '',
+    this.onSend,
+  });
+
+  final List<String> chunks;
+  final int statusCode;
+  final String body;
+  final void Function(http.BaseRequest request)? onSend;
+
+  bool closed = false;
+
+  @override
+  Future<http.StreamedResponse> send(http.BaseRequest request) async {
+    onSend?.call(request);
+
+    final controller = StreamController<List<int>>();
+    if (body.isNotEmpty) {
+      controller.add(utf8.encode(body));
+    } else {
+      for (final chunk in chunks) {
+        controller.add(utf8.encode(chunk));
+      }
+    }
+    // Fire-and-forget: nothing is listening yet, so awaiting `close()` would
+    // block forever and trip the provider's request timeout.
+    unawaited(controller.close());
+
+    return http.StreamedResponse(
+      controller.stream,
+      statusCode,
+      headers: {
+        'content-type': statusCode == 200
+            ? 'text/event-stream; charset=utf-8'
+            : 'application/json',
+      },
+    );
+  }
+
+  @override
+  void close() {
+    closed = true;
+    super.close();
+  }
+}
 
 void main() {
   group('GroqProvider', () {
@@ -219,6 +271,168 @@ void main() {
         throwsA(predicate((e) =>
             e is AiException && e.type == AiErrorType.missingApiKey)),
       );
+    });
+
+    // ── Streaming ───────────────────────────────────────────────
+
+    test('streamMessage emits deltas and stops at the [DONE] sentinel', () async {
+      final mockClient = _SseMockClient(chunks: [
+        'data: {"choices":[{"delta":{"content":"Meow"}}]}\n\n',
+        'data: {"choices":[{"delta":{"content":" there"}}]}\n\n',
+        'data: [DONE]\n\n',
+      ]);
+      final storage = FakeSecureStorageService(initialKey: dummyKey);
+      final provider = GroqProvider(
+        httpClient: mockClient,
+        secureStorage: storage,
+      );
+
+      final deltas = await provider
+          .streamMessage(ChatRequest(messages: [ChatMessage.user('Hi')]))
+          .toList();
+
+      expect(deltas, ['Meow', ' there']);
+    });
+
+    test('streamMessage reassembles SSE frames split across chunks', () async {
+      final mockClient = _SseMockClient(chunks: [
+        'data: {"choices":[{"delta":{"con',
+        'tent":"Hi"}}]}\n\ndata: {"choices":[{"delta":{"content":"!"}}]}\n\n',
+        'data: [DONE]\n\n',
+      ]);
+      final storage = FakeSecureStorageService(initialKey: dummyKey);
+      final provider = GroqProvider(
+        httpClient: mockClient,
+        secureStorage: storage,
+      );
+
+      final deltas = await provider
+          .streamMessage(ChatRequest(messages: [ChatMessage.user('Hi')]))
+          .toList();
+
+      expect(deltas, ['Hi', '!']);
+    });
+
+    test('streamMessage ignores comments, keep-alives, and empty frames', () async {
+      final mockClient = _SseMockClient(chunks: [
+        ': keep-alive\n\n',
+        '\n',
+        'data: {"choices":[{"delta":{}}]}\n\n',
+        'data: {"choices":[]}\n\n',
+        'data: {"choices":[{"delta":{"content":"Hey"}}]}\n\n',
+        'data: [DONE]\n\n',
+      ]);
+      final storage = FakeSecureStorageService(initialKey: dummyKey);
+      final provider = GroqProvider(
+        httpClient: mockClient,
+        secureStorage: storage,
+      );
+
+      final deltas = await provider
+          .streamMessage(ChatRequest(messages: [ChatMessage.user('Hi')]))
+          .toList();
+
+      expect(deltas, ['Hey']);
+    });
+
+    test('streamMessage requests stream mode with Bearer auth', () async {
+      http.Request? captured;
+      final mockClient = _SseMockClient(
+        chunks: ['data: [DONE]\n\n'],
+        onSend: (request) => captured = request as http.Request,
+      );
+      final storage = FakeSecureStorageService(initialKey: dummyKey);
+      final provider = GroqProvider(
+        httpClient: mockClient,
+        secureStorage: storage,
+      );
+
+      await provider
+          .streamMessage(ChatRequest(messages: [ChatMessage.user('Hi')]))
+          .toList();
+
+      expect(captured, isNotNull);
+      expect(captured!.headers['Authorization'], 'Bearer $dummyKey');
+      expect(captured!.headers['Content-Type'], 'application/json');
+
+      final payload = jsonDecode(captured!.body) as Map<String, dynamic>;
+      expect(payload['stream'], isTrue);
+      expect(payload['model'], 'openai/gpt-oss-20b');
+    });
+
+    test('streamMessage maps a non-200 response before emitting any deltas', () async {
+      final mockClient = _SseMockClient(
+        statusCode: 401,
+        body: jsonEncode({
+          'error': {'message': 'Invalid API Key'}
+        }),
+      );
+      final storage = FakeSecureStorageService(initialKey: dummyKey);
+      final provider = GroqProvider(
+        httpClient: mockClient,
+        secureStorage: storage,
+      );
+
+      await expectLater(
+        provider
+            .streamMessage(ChatRequest(messages: [ChatMessage.user('Hi')]))
+            .toList(),
+        throwsA(predicate(
+            (e) => e is AiException && e.type == AiErrorType.invalidApiKey)),
+      );
+    });
+
+    test('streamMessage surfaces mid-stream error frames safely', () async {
+      final mockClient = _SseMockClient(chunks: [
+        'data: {"choices":[{"delta":{"content":"Hel"}}]}\n\n',
+        'data: {"error":{"message":"Model overloaded"}}\n\n',
+        'data: [DONE]\n\n',
+      ]);
+      final storage = FakeSecureStorageService(initialKey: dummyKey);
+      final provider = GroqProvider(
+        httpClient: mockClient,
+        secureStorage: storage,
+      );
+
+      final collected = <String>[];
+      await expectLater(
+        provider
+            .streamMessage(ChatRequest(messages: [ChatMessage.user('Hi')]))
+            .forEach(collected.add),
+        throwsA(predicate((e) =>
+            e is AiException &&
+            e.type == AiErrorType.apiError &&
+            e.userFriendlyMessage.contains('Model overloaded'))),
+      );
+      expect(collected, ['Hel']);
+    });
+
+    test('streamMessage throws missingApiKey when no key is configured', () async {
+      final storage = FakeSecureStorageService(initialKey: null);
+      final provider = GroqProvider(
+        httpClient: _SseMockClient(),
+        secureStorage: storage,
+      );
+
+      await expectLater(
+        provider
+            .streamMessage(ChatRequest(messages: [ChatMessage.user('Hi')]))
+            .toList(),
+        throwsA(predicate(
+            (e) => e is AiException && e.type == AiErrorType.missingApiKey)),
+      );
+    });
+
+    test('dispose closes the underlying HTTP client', () {
+      final mockClient = _SseMockClient();
+      final provider = GroqProvider(
+        httpClient: mockClient,
+        secureStorage: FakeSecureStorageService(initialKey: dummyKey),
+      );
+
+      provider.dispose();
+
+      expect(mockClient.closed, isTrue);
     });
   });
 }

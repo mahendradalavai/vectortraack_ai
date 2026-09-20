@@ -14,10 +14,18 @@ class ChatRequest {
   final double temperature;
   final int maxTokens;
 
-  Map<String, dynamic> toJson({required String defaultModel}) => {
+  /// Serializes the request into an OpenAI-compatible payload.
+  ///
+  /// When [stream] is true, the provider is asked to return server-sent
+  /// events instead of a single completion object.
+  Map<String, dynamic> toJson({
+    required String defaultModel,
+    bool stream = false,
+  }) => {
         'model': model ?? defaultModel,
         'messages': messages.map((m) => m.toJson()).toList(),
         'temperature': temperature,
         'max_tokens': maxTokens,
+        if (stream) 'stream': true,
       };
 }

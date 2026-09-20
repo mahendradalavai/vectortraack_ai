@@ -20,8 +20,15 @@ class AiConfig {
   static const String groqApiEndpoint =
       'https://api.groq.com/openai/v1/chat/completions';
 
+  /// Groq models listing endpoint, used for connectivity & auth testing.
+  static const String groqModelsEndpoint =
+      'https://api.groq.com/openai/v1/models';
+
   /// Network timeout for Groq API requests.
   static const Duration requestTimeout = Duration(seconds: 30);
+
+  /// Shorter timeout for the lightweight connection test.
+  static const Duration connectionTestTimeout = Duration(seconds: 15);
 
   /// Default sampling temperature for creative yet coherent responses.
   static const double defaultTemperature = 0.7;
