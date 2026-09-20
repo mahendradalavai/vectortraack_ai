@@ -4,10 +4,10 @@ import 'package:kitten/core/ai/models/ai_exception.dart';
 import 'package:kitten/core/ai/models/chat_message.dart';
 import 'package:kitten/core/ai/models/chat_request.dart';
 import 'package:kitten/core/ai/models/chat_response.dart';
-import 'package:kitten/core/ai/prompts/kitten_system_prompt.dart';
 import 'package:kitten/core/ai/providers/ai_provider.dart';
 import 'package:kitten/core/ai/providers/groq_provider.dart';
 import 'package:kitten/core/models/assistant_state.dart';
+import 'package:kitten/core/personality/services/personality_service.dart';
 
 /// Orchestrates chat conversation flow between the user interface
 /// and the configured [AiProvider].
@@ -15,7 +15,20 @@ import 'package:kitten/core/models/assistant_state.dart';
 /// Keeps active session messages, prepends the Kitten personality prompt,
 /// and tracks the assistant's runtime state (idle -> thinking -> idle).
 class ChatService extends ChangeNotifier {
-  ChatService({AiProvider? provider}) : _provider = provider ?? GroqProvider();
+  ChatService({
+    AiProvider? provider,
+    PersonalityService? personality,
+  })  : _provider = provider ?? GroqProvider(),
+        _ownsPersonality = personality == null,
+        personality = personality ?? PersonalityService() {
+    // Mood changes should repaint the UI just like new messages do.
+    this.personality.addListener(_onPersonalityChanged);
+  }
+
+  /// Tracks Kitten's mood, which is folded into the system prompt.
+  final PersonalityService personality;
+
+  final bool _ownsPersonality;
 
   AiProvider _provider;
   final List<ChatMessage> _messages = [];
@@ -86,7 +99,7 @@ class ChatService extends ChangeNotifier {
 
       final assistantMessage = ChatMessage.assistant(response.content);
       _messages.add(assistantMessage);
-      _completeTurn();
+      _completeTurn(response.content);
       return assistantMessage;
     } catch (error) {
       _failTurn(error);
@@ -138,7 +151,7 @@ class ChatService extends ChangeNotifier {
 
       final assistantMessage = ChatMessage.assistant(content);
       _messages.add(assistantMessage);
-      _completeTurn();
+      _completeTurn(content);
       return assistantMessage;
     } catch (error) {
       // Guard against a repeated reset if the error happened after finalizing.
@@ -160,7 +173,11 @@ class ChatService extends ChangeNotifier {
 
   @override
   void dispose() {
+    personality.removeListener(_onPersonalityChanged);
     _provider.dispose();
+    if (_ownsPersonality) {
+      personality.dispose();
+    }
     super.dispose();
   }
 
@@ -171,21 +188,26 @@ class ChatService extends ChangeNotifier {
     _lastErrorType = null;
     _cancelRequested = false;
     _assistantState = AssistantState.thinking;
+    personality.onUserMessage(trimmed);
     notifyListeners();
   }
 
   /// The full payload sent to the provider: system prompt plus history.
   List<ChatMessage> _conversationPayload() => [
-        ChatMessage.system(KittenSystemPrompt.prompt),
+        ChatMessage.system(personality.buildSystemPrompt()),
         ..._messages,
       ];
 
-  void _completeTurn() {
+  void _completeTurn(String reply) {
+    personality.onAssistantMessage(reply);
     _assistantState = AssistantState.idle;
     notifyListeners();
   }
 
+  void _onPersonalityChanged() => notifyListeners();
+
   void _failTurn(Object error) {
+    personality.onFailure();
     if (error is AiException) {
       _lastError = error.userFriendlyMessage;
       _lastErrorType = error.type;

@@ -6,7 +6,7 @@
 - **Framework:** Flutter 3.47.5 (stable channel)
 - **Target platform:** Android (primary), with iOS/Web/Windows/macOS/Linux scaffolding present
 - **Version control:** Git repository. Baseline `492be59`, Task 003 closure `4ed421c`.
-- **Current development stage:** Task 005 complete — voice conversation plus "Hey Kitten" wake-word activation. Kitten can be woken by voice, answers aloud, and cycles automatically between turns; wake listening is opt-in and foreground-only.
+- **Current development stage:** Task 006 complete — Kitten is now a procedurally drawn character with an evolving mood that colours both its expression and its replies, plus idle behaviours (breathing, blinking, ear twitches, a swaying tail) and dozing off when left alone.
 
 ## Environment
 
@@ -35,11 +35,47 @@
 2. **Task 002 — Create the Kitten App Foundation** — feature-based architecture, home screen, animated avatar, `AssistantState` model, settings placeholder, Material 3 dark mode.
 3. **Task 003 — Groq AI Provider Foundation** — pluggable `AiProvider`, isolated `GroqProvider`, encrypted key storage with masking, personality prompt, streaming text conversation UI, settings with connection testing. Closed out with Git init, doc fixes, typed errors, SSE token streaming, and disposal cleanups.
 4. **Task 004 — Voice Input / Output** — hands-free voice conversation, spoken replies, and graceful degradation to text-only mode.
-5. **Task 005 — "Hey Kitten" Activation** — opt-in, foreground-only wake-word listening with remainder-as-command described below.
+5. **Task 005 — "Hey Kitten" Activation** — opt-in, foreground-only wake-word listening with remainder-as-command.
+6. **Task 006 — Kitten Animation / Personality System** — procedural animated character and an evolving mood described below.
 
 ## Current Task
 
-**Task 005 — "Hey Kitten" Activation**
+**Task 006 — Kitten Animation / Personality System**
+Status: **COMPLETED**
+
+### What was built (Task 006)
+
+- **Procedural avatar** — `KittenAvatar` no longer draws an emoji in a circle. A `CustomPainter`
+  draws Kitten from primitives: head, ears with pink inners, eyes with highlights, nose, mouth,
+  whiskers, blush, and a tail. No image assets are involved, so it scales crisply to any size
+  and stays diffable in version control.
+- **Idle life (selected behaviour):** breathing, randomised blinking, occasional ear twitches,
+  and a continuously swaying tail. When the mood goes sleepy Kitten closes its eyes, settles
+  slightly lower, and slows its breathing.
+- **Evolving mood (selected behaviour):** `PersonalityService` derives a `KittenMood` from the
+  conversation with simple, deterministic rules — affectionate words warm Kitten up, playful
+  words or exclamations lift it, questions make it curious, plain statements settle it, and a
+  failed turn makes it concerned. Rapport grows with every exchange.
+- **Mood feeds the prompt:** the mood is appended to the system prompt, so tone and expression
+  always agree. Scope constraints are deliberately kept *above* the mood section so the
+  character's feelings can never override them.
+- **Doze-off ticker:** `HomePage` ages the mood every 15 seconds; after 90 quiet seconds Kitten
+  falls asleep, and any new message wakes it.
+- **Accessibility:** the avatar exposes a spoken description such as
+  "Kitten is listening, feeling affectionate".
+
+### Visual verification (web preview)
+
+- Confirmed the drawing renders correctly as a cat, not a blob, and caught a real bug in the
+  process: the whisker geometry mixed raw pixels with head-radius units, so two of the three
+  whiskers per side stretched hundreds of pixels down the screen.
+- Confirmed the **sleepy** mood visually — closed eyes and a desaturated tint appeared after the
+  idle threshold, proving the whole `personality -> ChatService -> VoiceController -> HomePage`
+  notification chain works.
+
+---
+
+### Previous task — Task 005 — "Hey Kitten" Activation
 Status: **COMPLETED**
 
 ### What was built (Task 005)
@@ -114,7 +150,7 @@ Status: **COMPLETED**
 
 ## Pending Tasks
 
-Awaiting instructions for Task 006 (kitten animation / personality system).
+Awaiting instructions for Task 007 (Android app-awareness).
 
 ## Features Planned
 
@@ -163,6 +199,10 @@ The following are planned but **NOT yet implemented**:
 | `lib/core/voice/services/voice_controller.dart` | 004 | Hands-free listen -> chat -> speak loop |
 | `lib/core/voice/util/voice_text_cleaner.dart` | 004 | Strips stage directions/emoji before speaking |
 | `lib/core/voice/util/wake_word_matcher.dart` | 005 | Pure wake-phrase matcher with remainder extraction |
+| `lib/core/personality/models/kitten_mood.dart` | 006 | Mood enum carrying label and prompt fragment |
+| `lib/core/personality/services/personality_service.dart` | 006 | Rule-based mood and rapport tracker |
+| `test/core/personality/personality_service_test.dart` | 006 | Mood rules, idling, and prompt integration tests |
+| `test/features/kitten/kitten_avatar_test.dart` | 006 | Paints every state/mood combination without error |
 | `test/core/ai/ai_models_test.dart` | 003 | AI models, exceptions, prompts, config tests |
 | `test/core/ai/groq_provider_test.dart` | 003 | Provider HTTP + SSE streaming tests |
 | `test/core/ai/chat_service_test.dart` | 003 | Chat streaming, cancellation, error classification |
@@ -189,6 +229,10 @@ The following are planned but **NOT yet implemented**:
 | `lib/core/voice/services/device_speech_service.dart` | 005 | Maps listen mode to the command/dictation engines |
 | `lib/core/voice/services/voice_controller.dart` | 005 | Added the `VoiceMode` wake-watch state machine, suspend/resume, and preference restore |
 | `lib/core/services/secure_storage_service.dart` | 005 | Persists the Wake Word and Speak Replies preferences |
+| `lib/features/kitten/presentation/widgets/kitten_avatar.dart` | 006 | Replaced the emoji circle with a mood-aware procedural cat |
+| `lib/core/ai/prompts/kitten_system_prompt.dart` | 006 | Added `build()` to append the live mood below the scope constraints |
+| `lib/core/ai/services/chat_service.dart` | 006 | Owns `PersonalityService`, feeds it each turn, and uses its prompt |
+| `lib/features/home/presentation/pages/home_page.dart` | 006 | Passes the mood to the avatar and ages it on a ticker |
 | `android/app/src/main/AndroidManifest.xml` | 004 | Added `RECORD_AUDIO` and speech/TTS `<queries>` visibility |
 | `test/widget_test.dart` | 002, 003 | Covers chat input, settings navigation, AI settings section |
 
@@ -225,17 +269,20 @@ degrades the app to text-only mode rather than failing.
 | Task 003 (original) | 0 issues | 26/26 passed |
 | Task 003 (closure) | 0 issues | 42/42 passed |
 | Task 004 | 0 issues | 61/61 passed |
-| Task 005 | **0 issues** | **81/81 passed** |
+| Task 005 | 0 issues | 81/81 passed |
+| Task 006 | **0 issues** | **98/98 passed** |
 
-Task 005 suite breakdown (8 suites total):
+Task 006 suite breakdown (10 suites total):
 
 - `ai_models_test.dart`: 7
-- `chat_service_test.dart`: 12
+- `chat_service_test.dart`: 13
 - `groq_provider_test.dart`: 17
 - `secure_storage_service_test.dart`: 5
 - `voice_controller_test.dart`: 22
 - `voice_text_cleaner_test.dart`: 7
 - `wake_word_matcher_test.dart`: 10
+- `personality_service_test.dart`: 13
+- `kitten_avatar_test.dart`: 3
 - `widget_test.dart`: 1
 
 ## Security Review Result
@@ -261,6 +308,11 @@ Task 005 suite breakdown (8 suites total):
 - **No background wake word:** listening stops when the app leaves the foreground; Task 012
   covers a foreground service and persistent notification.
 - **`handsFree` is not exposed in Settings** — it is configurable on `VoiceController` only.
+- **Avatar visual verification is limited to the web preview.** Every state/mood combination is
+  asserted to paint without error, but only the curious and sleepy moods have been looked at.
+  There are no golden-image tests, so pixel-level regressions would not be caught.
+- **Mood is session-only:** it is derived from the live conversation and is not persisted, so
+  Kitten always starts curious.
 - **Application ID & Signing:** still `com.example.kitten` with debug signing.
 
 ## Decisions
@@ -282,10 +334,15 @@ Task 005 suite breakdown (8 suites total):
 - **Wake word:** always-on speech-to-text rather than a bundled wake-word engine — no
   third-party account, at the cost of some battery. Off by default, foreground only, and the
   phrase's remainder is treated as the question when present.
+- **Avatar:** drawn procedurally with `CustomPainter` instead of Rive/Lottie assets, so it needs
+  no artwork, scales to any size, and stays readable in diffs.
+- **Personality:** mood is computed by explicit, testable rules over the conversation rather
+  than by asking the model how it feels, and is appended to the system prompt beneath the scope
+  constraints.
 
 ## Next Task
 
-**Task 006 — Kitten animation / personality system.**
+**Task 007 — Android app-awareness.**
 
 ## Task History
 
@@ -349,3 +406,19 @@ Task 005 suite breakdown (8 suites total):
 - **On-device:** verified on Pixel_7 (Android 17 / API 37) — off by default, switch enables
   recognition, preference survives restart, switch disables it again
 - **Result:** PASS (spoken wake phrase pending a physical device)
+
+### Task 006
+- **Status:** COMPLETED · **Date:** 2026-09-20
+- **Summary:** Replaced the emoji avatar with a procedurally drawn, mood-aware character. Added
+  the `KittenMood` model and a rule-based `PersonalityService`, appended the live mood to the
+  system prompt beneath the scope constraints, and gave `ChatService` ownership of the
+  personality so every turn updates it. Added idle behaviours (breathing, blinking, ear
+  twitches, swaying tail) and a doze-off ticker on the home page.
+- **Files created:** `kitten_mood.dart`, `personality_service.dart`, plus 2 test files
+- **Files modified:** `kitten_avatar.dart`, `kitten_system_prompt.dart`, `chat_service.dart`,
+  `home_page.dart`
+- **Dependencies added:** none
+- **Testing:** `flutter analyze` — 0 issues; `flutter test` — 98/98 passed
+- **Visual check:** web preview confirmed the cat renders correctly and that the sleepy mood
+  engages after the idle threshold; a whisker geometry bug was found and fixed this way
+- **Result:** PASS

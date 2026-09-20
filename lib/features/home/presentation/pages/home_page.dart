@@ -37,6 +37,9 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   /// The last voice problem already shown, so it is not repeated.
   String? _shownVoiceError;
 
+  /// Ages Kitten's mood so it can doze off after a quiet spell.
+  Timer? _idleTicker;
+
   @override
   void initState() {
     super.initState();
@@ -47,11 +50,17 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
     // Re-apply the user's saved voice preferences.
     unawaited(_voice.restorePreferences());
+
+    _idleTicker = Timer.periodic(
+      const Duration(seconds: 15),
+      (_) => _chatService.personality.tick(),
+    );
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _idleTicker?.cancel();
     _voice.removeListener(_onVoiceUpdate);
     if (widget.voiceController == null) {
       _voice.dispose();
@@ -227,7 +236,11 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
                   // Kitten avatar (reacts dynamically to AssistantState)
                   Center(
-                    child: KittenAvatar(state: state, size: 140),
+                    child: KittenAvatar(
+                      state: state,
+                      mood: _chatService.personality.mood,
+                      size: 140,
+                    ),
                   ),
                   const SizedBox(height: 14),
 

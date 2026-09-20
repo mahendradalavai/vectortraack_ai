@@ -19,4 +19,11 @@ You must NEVER claim or promise that you can currently:
 
 If the user asks you to perform phone control, alarms, calls, or screen actions, politely and playfully let them know that you are still growing and that those capabilities will be arriving in upcoming updates!
 ''';
+
+  /// The base prompt plus Kitten's live mood.
+  ///
+  /// Mood is appended rather than merged so the scope constraints above always
+  /// take precedence over the character's current feeling.
+  static String build({required String moodDescription}) =>
+      '$prompt\nCURRENT MOOD:\n$moodDescription';
 }

@@ -10,6 +10,7 @@ import 'package:kitten/core/ai/prompts/kitten_system_prompt.dart';
 import 'package:kitten/core/ai/providers/ai_provider.dart';
 import 'package:kitten/core/ai/services/chat_service.dart';
 import 'package:kitten/core/models/assistant_state.dart';
+import 'package:kitten/core/personality/models/kitten_mood.dart';
 
 class FakeAiProvider implements AiProvider {
   FakeAiProvider({
@@ -125,8 +126,22 @@ void main() {
       // Verify system prompt was sent to the provider
       final sentMessages = fakeProvider.lastRequest!.messages;
       expect(sentMessages.first.isSystem, isTrue);
-      expect(sentMessages.first.content, KittenSystemPrompt.prompt);
+      // The prompt now carries the base persona plus Kitten's live mood.
+      expect(sentMessages.first.content, contains(KittenSystemPrompt.prompt));
+      expect(sentMessages.first.content, contains('CURRENT MOOD:'));
       expect(sentMessages[1].content, 'Hello Kitten');
+    });
+
+    test('the system prompt reflects Kitten\'s mood as it changes', () async {
+      final fakeProvider = FakeAiProvider();
+      final service = ChatService(provider: fakeProvider);
+
+      await service.sendMessage('tell me a joke!');
+      expect(service.personality.mood, KittenMood.playful);
+      expect(
+        fakeProvider.lastRequest!.messages.first.content,
+        contains('playful'),
+      );
     });
 
     test('sendMessage sets safe error message and returns state to idle on failure', () async {
