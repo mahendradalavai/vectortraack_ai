@@ -6,6 +6,7 @@ import 'package:kitten/core/ai/services/chat_service.dart';
 import 'package:kitten/core/awareness/services/app_awareness_controller.dart';
 import 'package:kitten/core/constants/app_constants.dart';
 import 'package:kitten/core/models/assistant_state.dart';
+import 'package:kitten/core/screen/services/screen_understanding_controller.dart';
 import 'package:kitten/core/voice/config/voice_config.dart';
 import 'package:kitten/core/voice/services/voice_controller.dart';
 import 'package:kitten/features/home/presentation/widgets/chat_bubble.dart';
@@ -18,7 +19,12 @@ import 'package:kitten/shared/widgets/assistant_status_indicator.dart';
 /// Integrates the Kitten avatar, status indicator, voice placeholder,
 /// text conversation history, and text input field connected to the AI provider.
 class HomePage extends StatefulWidget {
-  const HomePage({super.key, this.voiceController, this.awarenessController});
+  const HomePage({
+    super.key,
+    this.voiceController,
+    this.awarenessController,
+    this.screenController,
+  });
 
   /// Optional injected [VoiceController] for testing and dependency injection.
   ///
@@ -28,6 +34,9 @@ class HomePage extends StatefulWidget {
   /// Optional injected [AppAwarenessController] for testing.
   final AppAwarenessController? awarenessController;
 
+  /// Optional injected [ScreenUnderstandingController] for testing.
+  final ScreenUnderstandingController? screenController;
+
   @override
   State<HomePage> createState() => _HomePageState();
 }
@@ -36,6 +45,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   late final VoiceController _voice;
   late final ChatService _chatService;
   late final AppAwarenessController _awareness;
+  late final ScreenUnderstandingController _screen;
 
   /// The chat service we built ourselves, and so must dispose.
   ChatService? _ownedChatService;
@@ -68,11 +78,18 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     }
     _chatService = _voice.chatService;
     _voice.addListener(_onVoiceUpdate);
+
+    // Screen understanding streams its answer into the same conversation.
+    _screen = widget.screenController ??
+        ScreenUnderstandingController(chatService: _chatService);
+    _screen.addListener(_onScreenUpdate);
+
     WidgetsBinding.instance.addObserver(this);
 
     // Re-apply the user's saved preferences.
     unawaited(_voice.restorePreferences());
     unawaited(_awareness.restorePreferences());
+    unawaited(_screen.restoreIntroduction());
 
     _idleTicker = Timer.periodic(
       const Duration(seconds: 15),
@@ -92,6 +109,10 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     _awareness.removeListener(_onAwarenessUpdate);
     if (widget.awarenessController == null) {
       _awareness.dispose();
+    }
+    _screen.removeListener(_onScreenUpdate);
+    if (widget.screenController == null) {
+      _screen.dispose();
     }
     _textController.dispose();
     _scrollController.dispose();
@@ -113,6 +134,74 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
   void _onAwarenessUpdate() {
     if (mounted) setState(() {});
+  }
+
+  void _onScreenUpdate() {
+    if (mounted) setState(() {});
+  }
+
+  /// Takes one screenshot with the user's consent and asks Kitten about it.
+  Future<void> _handleReadScreen() async {
+    if (_isBusy || _screen.isCapturing) return;
+
+    if (!_screen.isSupported) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Screen reading is only available on Android.'),
+          duration: Duration(seconds: 3),
+        ),
+      );
+      return;
+    }
+
+    // Explain what is about to happen, once, before anything is captured.
+    if (_screen.needsIntroduction) {
+      final agreed = await _confirmScreenReading();
+      if (agreed != true) return;
+      await _screen.markIntroduced();
+    }
+
+    // Typed text becomes the question; otherwise Kitten is asked to describe
+    // the screen.
+    final question = _textController.text.trim();
+    if (question.isNotEmpty) _textController.clear();
+
+    final outcome = await _screen.readScreen(
+      question: question.isEmpty ? null : question,
+    );
+
+    if (!mounted) return;
+    final error = outcome.error;
+    if (outcome.status == ScreenReadStatus.failed && error != null) {
+      _showErrorSnackBar(error);
+    }
+  }
+
+  /// The one-time privacy explanation shown before the first screen read.
+  Future<bool?> _confirmScreenReading() {
+    return showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Read your screen?'),
+        content: const Text(
+          'Kitten will take one screenshot and send it to a Groq vision model '
+          'so it can answer your question about what is on your screen.\n\n'
+          'Android asks you to allow the capture every time, nothing runs in '
+          'the background, and no screenshot is taken unless you press this '
+          'button.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Continue'),
+          ),
+        ],
+      ),
+    );
   }
 
   /// True while Kitten is thinking or streaming a reply.
@@ -502,6 +591,24 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                       ),
                     ),
                     const SizedBox(width: 8),
+                    IconButton(
+                      onPressed: (_isBusy ||
+                              _screen.isCapturing ||
+                              !_screen.isSupported)
+                          ? null
+                          : _handleReadScreen,
+                      tooltip: 'Read my screen',
+                      icon: _screen.isCapturing
+                          ? const SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(
+                              Icons.screenshot_monitor_outlined,
+                              size: 20,
+                            ),
+                    ),
                     IconButton.filled(
                       onPressed: isStreaming
                           ? _chatService.cancelStreaming

@@ -26,6 +26,12 @@
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
         </activity>
+        <!-- Screen understanding: runs only while a single screenshot is being
+             taken, so the system can show that the screen is being captured. -->
+        <service
+            android:name=".ScreenCaptureService"
+            android:exported="false"
+            android:foregroundServiceType="mediaProjection"/>
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
         <meta-data
@@ -38,13 +44,18 @@
 
          In particular, this is used by the Flutter engine in io.flutter.plugin.text.ProcessTextPlugin. -->
     <!-- Voice input: required by speech_to_text for "Hey Kitten"/Talk. -->
-    <uses-permission android:name="android.permission.RECORD_AUDIO"/>
-    <!-- App awareness: a special app-op the user grants in system settings.
-         Lint flags it as a protected permission, which is expected here: it is
-         declared so the settings screen lists Kitten, not to be auto-granted. -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO"/>        <!-- App awareness: a special app-op the user grants in system settings.
+             Lint flags it as a protected permission, which is expected here: it is
+             declared so the settings screen lists Kitten, not to be auto-granted. -->
     <uses-permission
         android:name="android.permission.PACKAGE_USAGE_STATS"
         tools:ignore="ProtectedPermissions"/>
+    <!-- Screen understanding: MediaProjection needs a foreground service, and on
+         Android 14+ that service must declare the mediaProjection type, which
+         itself requires this dedicated permission. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION"/>
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
     <queries>
         <intent>
             <action android:name="android.intent.action.PROCESS_TEXT"/>

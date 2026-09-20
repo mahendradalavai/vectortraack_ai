@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart';
 
+import 'package:kitten/core/ai/config/ai_config.dart';
 import 'package:kitten/core/ai/models/ai_exception.dart';
 import 'package:kitten/core/ai/models/chat_message.dart';
 import 'package:kitten/core/ai/models/chat_request.dart';
@@ -90,6 +91,29 @@ class ChatService extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Sends a question together with a screenshot for Kitten to look at.
+  ///
+  /// The reply streams exactly like [sendMessageStreaming], but the turn is
+  /// routed to a vision-capable model because the everyday text model cannot
+  /// read images.
+  Future<ChatMessage?> sendMessageWithImage(
+    String text,
+    String imageBase64, {
+    String imageMimeType = 'image/jpeg',
+  }) async {
+    final trimmed = text.trim();
+    if (trimmed.isEmpty) return null;
+
+    _beginTurn(
+      ChatMessage.userWithImage(
+        trimmed,
+        imageBase64,
+        imageMimeType: imageMimeType,
+      ),
+    );
+    return _streamReply(AiConfig.visionModel);
+  }
+
   /// Sends a text message from the user and awaits a single complete response.
   ///
   /// Prefer [sendMessageStreaming] for interactive UIs; this path is kept as a
@@ -98,7 +122,7 @@ class ChatService extends ChangeNotifier {
     final trimmed = text.trim();
     if (trimmed.isEmpty) return null;
 
-    _beginTurn(trimmed);
+    _beginTurn(ChatMessage.user(trimmed));
 
     try {
       final request = ChatRequest(messages: _conversationPayload());
@@ -122,7 +146,13 @@ class ChatService extends ChangeNotifier {
     final trimmed = text.trim();
     if (trimmed.isEmpty) return null;
 
-    _beginTurn(trimmed);
+    _beginTurn(ChatMessage.user(trimmed));
+    return _streamReply();
+  }
+
+  /// Streams a reply for the turn already begun by [_beginTurn], optionally on
+  /// an override [model] such as the vision model for a screenshot turn.
+  Future<ChatMessage?> _streamReply([String? model]) async {
     _isStreaming = true;
     _streamBuffer.clear();
     notifyListeners();
@@ -130,7 +160,10 @@ class ChatService extends ChangeNotifier {
     var cancelled = false;
 
     try {
-      final request = ChatRequest(messages: _conversationPayload());
+      var request = ChatRequest(messages: _conversationPayload());
+      if (model != null) {
+        request = request.withModel(model);
+      }
 
       await for (final delta in _provider.streamMessage(request)) {
         if (_cancelRequested) {
@@ -189,28 +222,43 @@ class ChatService extends ChangeNotifier {
   }
 
   /// Appends the user's message and marks Kitten as thinking.
-  void _beginTurn(String trimmed) {
-    _messages.add(ChatMessage.user(trimmed));
+  void _beginTurn(ChatMessage message) {
+    _messages.add(message);
     _lastError = null;
     _lastErrorType = null;
     _cancelRequested = false;
     _assistantState = AssistantState.thinking;
-    personality.onUserMessage(trimmed);
+    personality.onUserMessage(message.content);
     notifyListeners();
   }
 
   /// The full payload sent to the provider: system prompt plus history.
+  ///
+  /// Resending every past screenshot on every turn would burn tokens fast, so
+  /// only the most recent image-bearing message keeps its image; older ones
+  /// become their text alone.
   List<ChatMessage> _conversationPayload() {
     final systemPrompt = personality.buildSystemPrompt();
     final context = _promptContext?.call()?.trim();
 
-    return [
+    final messages = [
       ChatMessage.system(
         context == null || context.isEmpty
             ? systemPrompt
             : '$systemPrompt\n\n$context',
       ),
       ..._messages,
+    ];
+
+    var lastImageIndex = -1;
+    for (var i = 0; i < messages.length; i++) {
+      if (messages[i].hasImage) lastImageIndex = i;
+    }
+    if (lastImageIndex < 0) return messages;
+
+    return [
+      for (var i = 0; i < messages.length; i++)
+        i == lastImageIndex ? messages[i] : messages[i].withoutImage(),
     ];
   }
 

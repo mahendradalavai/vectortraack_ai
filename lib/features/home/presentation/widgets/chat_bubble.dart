@@ -50,12 +50,40 @@ class ChatBubble extends StatelessWidget {
                   bottomRight: Radius.circular(isUser ? 4 : 16),
                 ),
               ),
-              child: SelectableText(
-                message.content,
-                style: tt.bodyMedium?.copyWith(
-                  color: isUser ? cs.onPrimary : cs.onSurface,
-                  height: 1.35,
-                ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // Make it unmistakable that a screenshot went with this turn.
+                  if (message.hasImage) ...[
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          Icons.screenshot_monitor_outlined,
+                          size: 13,
+                          color: isUser ? cs.onPrimary : cs.onSurfaceVariant,
+                        ),
+                        const SizedBox(width: 6),
+                        Text(
+                          'Screenshot',
+                          style: tt.labelSmall?.copyWith(
+                            color: isUser ? cs.onPrimary : cs.onSurfaceVariant,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 6),
+                  ],
+                  SelectableText(
+                    message.content,
+                    style: tt.bodyMedium?.copyWith(
+                      color: isUser ? cs.onPrimary : cs.onSurface,
+                      height: 1.35,
+                    ),
+                  ),
+                ],
               ),
             ),
           ),

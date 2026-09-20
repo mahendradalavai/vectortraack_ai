@@ -6,7 +6,7 @@
 - **Framework:** Flutter 3.47.5 (stable channel)
 - **Target platform:** Android (primary), with iOS/Web/Windows/macOS/Linux scaffolding present
 - **Version control:** Git repository. Baseline `492be59`, Task 003 closure `4ed421c`.
-- **Current development stage:** Task 007 complete — Kitten can now see which app you were last using (with the user's explicit Usage Access grant), show it on the home screen, and fold it into its own context when replying.
+- **Current development stage:** Task 008 complete — Kitten can now look at your screen on demand: one press, Android's consent prompt, one screenshot, and an answer from a vision model that streams into the same conversation.
 
 ## Environment
 
@@ -38,10 +38,85 @@
 5. **Task 005 — "Hey Kitten" Activation** — opt-in, foreground-only wake-word listening with remainder-as-command.
 6. **Task 006 — Kitten Animation / Personality System** — procedural animated character and an evolving mood described below.
 7. **Task 007 — Android App-Awareness** — Android usage-stat tracking behind an explicit permission, surfaced in the UI and in Kitten's prompt, described below.
+8. **Task 008 — Screen Understanding** — on-demand screenshot capture with explicit consent, answered by a vision model, described below.
 
 ## Current Task
 
-**Task 007 — Android App-Awareness**
+**Task 008 — Screen Understanding with Explicit Permission**
+Status: **COMPLETED**
+
+### What was built (Task 008)
+
+- **On-demand capture (selected behaviour):** `ScreenUnderstandingController` takes exactly one
+  screenshot per press of the new button, and only after Android's own projection consent
+  dialog. Nothing is captured in the background, and there is no always-on screen reading.
+- **MediaProjection + foreground service (selected behaviour):** a Kotlin
+  `ScreenCaptureService` takes the shot. Android 14+ refuses to project unless a foreground
+  service of the `mediaProjection` type is already running, so the service lives for the
+  second the capture takes, shows the system's "Kitten is reading your screen" notice, and
+  stops itself immediately afterwards.
+- **The image goes to a vision model (selected behaviour):** the screenshot is attached to the
+  user's turn as an OpenAI-compatible `image_url` part carrying an inline base64 data URL, and
+  that turn is routed to `qwen/qwen3.8-27b` — Groq's multimodal model — because the everyday
+  text model cannot read pictures. `ChatRequest.withModel` makes that a one-line reroute.
+- **A vision turn is a normal conversation turn:** it streams, cancels, and lands in the same
+  chat history as any other message, and the bubble carries a small "Screenshot" label so it is
+  unmistakable that a picture went with it.
+- **Token discipline:** replaying history resends only the *newest* screenshot. Older image
+  turns fall back to their text, so a long conversation does not re-upload a picture every turn.
+- **Privacy notice (once):** before the first capture the app explains exactly what will happen
+  — one screenshot, sent to Groq, consent asked every time, nothing in the background — and
+  remembers that it explained. Cancelling captures nothing.
+- **Fails soft:** every platform failure is mapped to a typed `ScreenCaptureException` and a
+  plain-English message. A cancelled consent is reported as *cancelled*, not as an error, so
+  saying no stays quiet.
+
+### On-device verification (Pixel 7, Android 17 / API 37)
+
+Verified with a real device integration test (`integration_test/screen_understanding_test.dart`).
+Reproduce with:
+
+```bash
+adb install -r build/app/outputs/flutter-apk/app-debug.apk
+adb shell appops set com.example.kitten PROJECT_MEDIA allow
+flutter test integration_test/screen_understanding_test.dart -d emulator-5554
+```
+
+- **3 of 3 runnable tests passed, 1 skipped.** A real screenshot was captured and returned as a
+  valid JPEG: **31,740 bytes at 1080x2400**, verified by decoding it and checking the JPEG
+  start-of-image marker.
+- The one-time privacy note appeared before the first read, and Cancel captured nothing.
+- The vision turn was confirmed to ask for `qwen/qwen3.8-27b` rather than the text model.
+- **Skipped on this emulator:** the live vision round-trip, because no Groq API key is
+  configured on it. The test skips itself with a clear message instead of pretending to pass.
+- **Not verified on device:** the vision model's actual description of a real screen (needs an
+  API key), and the consent dialog being *declined* by a human, which is covered by unit tests.
+
+### Bugs found and fixed while verifying (Task 008)
+
+On-device testing earned its keep here. Five real defects surfaced, four of them invisible to
+unit tests:
+
+1. **The app died on the first capture.** `createVirtualDisplay` threw
+   `IllegalStateException: Must register a callback before starting capture`, and because the
+   service's work was not wrapped, an uncaught exception on the main thread killed the whole
+   process. Fixed by registering a `MediaProjection.Callback`, *and* by wrapping the capture so
+   a failure now returns "could not capture" instead of taking the app down.
+2. **`Virtual display density must be positive`.** The screen-metrics helper filled width and
+   height from the window metrics but never set `densityDpi`, so the projection refused to
+   start. Density now comes from resources, which is always populated.
+3. **The first image callback was treated as the frame.** `acquireLatestImage` can return
+   nothing before a frame is readable; giving up on the first miss made the capture fail. It
+   now waits for the next callback, with a real timeout behind it.
+4. **A rewrite silently dropped imports** the app-awareness code depended on. Caught by the
+   Kotlin compiler, not by analysis.
+5. **The platform sends bytes, Dart asked for a string.** `invokeMethod<String>` on a `byte[]`
+   threw a cast error; the JPEG is now received as `Uint8List` and base64-encoded on the Dart
+   side, where the data URL is built anyway.
+
+---
+
+### Previous task — Task 007 — Android App-Awareness
 Status: **COMPLETED**
 
 ### What was built (Task 007)
@@ -210,7 +285,7 @@ Status: **COMPLETED**
 
 ## Pending Tasks
 
-Awaiting instructions for Task 008 (screen understanding with explicit permission).
+Awaiting instructions for Task 009 (assistant tool/function system).
 
 ## Features Planned
 
@@ -220,7 +295,7 @@ The following are planned but **NOT yet implemented**:
 - Background listening / service
 - Usage-history analysis beyond the single most recent app
 - Context-aware questions driven by the app (the context is now available; richer prompts are not)
-- Screen capture / understanding
+- Continuous or automatic screen watching (capture is deliberately one-shot and on demand)
 - Phone assistant commands (device settings, volume, etc.)
 - Alarm & timer commands
 - Calling contacts & SMS
@@ -259,6 +334,13 @@ The following are planned but **NOT yet implemented**:
 | `lib/core/voice/services/voice_controller.dart` | 004 | Hands-free listen -> chat -> speak loop |
 | `lib/core/voice/util/voice_text_cleaner.dart` | 004 | Strips stage directions/emoji before speaking |
 | `lib/core/voice/util/wake_word_matcher.dart` | 005 | Pure wake-phrase matcher with remainder extraction |
+| `lib/core/screen/config/screen_config.dart` | 008 | Default question, capture timeout, and the privacy-note key |
+| `lib/core/screen/services/screen_capture_service.dart` | 008 | Abstract capture contract + typed `ScreenCaptureException` |
+| `lib/core/screen/services/method_channel_screen_capture_service.dart` | 008 | Native-channel capture implementation |
+| `lib/core/screen/services/screen_understanding_controller.dart` | 008 | Consent flow, one-shot capture, and the vision turn |
+| `test/core/screen/screen_understanding_controller_test.dart` | 008 | Consent, failure, sizing, intro, and busy-state tests |
+| `integration_test/screen_understanding_test.dart` | 008 | On-device capture and privacy-note verification |
+| `android/app/src/main/kotlin/com/example/kitten/ScreenCaptureService.kt` | 008 | One-shot MediaProjection capture foreground service |
 | `lib/core/awareness/models/foreground_app.dart` | 007 | Foreground app model with package-name fallback naming |
 | `lib/core/awareness/services/app_awareness_service.dart` | 007 | Abstract app-awareness contract |
 | `lib/core/awareness/services/method_channel_app_awareness_service.dart` | 007 | Native-channel implementation |
@@ -300,6 +382,14 @@ The following are planned but **NOT yet implemented**:
 | `lib/core/ai/prompts/kitten_system_prompt.dart` | 006 | Added `build()` to append the live mood below the scope constraints |
 | `lib/core/ai/services/chat_service.dart` | 006 | Owns `PersonalityService`, feeds it each turn, and uses its prompt |
 | `lib/features/home/presentation/pages/home_page.dart` | 006 | Passes the mood to the avatar and ages it on a ticker |
+| `lib/core/ai/models/chat_message.dart` | 008 | Carries an optional image and emits multimodal content parts |
+| `lib/core/ai/models/chat_request.dart` | 008 | Added `withModel` so a turn can be rerouted to the vision model |
+| `lib/core/ai/services/chat_service.dart` | 008 | `sendMessageWithImage` streams a vision turn and trims old screenshots |
+| `lib/core/ai/config/ai_config.dart` | 008 | Added the vision model id and the image size guard |
+| `lib/features/home/presentation/pages/home_page.dart` | 008 | "Read my screen" button and the one-time privacy dialog |
+| `lib/features/home/presentation/widgets/chat_bubble.dart` | 008 | Marks messages that carried a screenshot |
+| `lib/core/services/secure_storage_service.dart` | 008 | Persists the privacy-note flag |
+| `android/app/src/main/kotlin/com/example/kitten/MainActivity.kt` | 008 | Added the `kitten/screen_capture` channel and consent hand-off |
 | `lib/core/ai/services/chat_service.dart` | 007 | Accepts a `contextProvider` and appends it to the system prompt |
 | `lib/features/home/presentation/pages/home_page.dart` | 007 | Owns the awareness controller, shows the last-app hint, suspends polling on background |
 | `lib/features/settings/presentation/pages/settings_page.dart` | 007 | Real App Awareness switch, Usage Access status, and last-app row |
@@ -331,6 +421,9 @@ The following are planned but **NOT yet implemented**:
 |------------|------|---------|
 | `android.permission.RECORD_AUDIO` | 004 | Capturing the user's voice for speech recognition |
 | `android.permission.PACKAGE_USAGE_STATS` | 007 | Reading which app the user was last using |
+| `android.permission.FOREGROUND_SERVICE` | 008 | Hosting the short-lived capture service |
+| `android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION` | 008 | Required on Android 14+ to project the screen at all |
+| `android.permission.POST_NOTIFICATIONS` | 008 | Declared for the capture notice; not requested at runtime yet |
 
 `RECORD_AUDIO` is requested at runtime when the user first taps Talk; denied or unavailable
 speech input degrades the app to text-only mode rather than failing.
@@ -351,9 +444,10 @@ requested.
 | Task 004 | 0 issues | 61/61 passed |
 | Task 005 | 0 issues | 81/81 passed |
 | Task 006 | 0 issues | 98/98 passed |
-| Task 007 | **0 issues** | **123/123 passed** (+ 3/3 on-device) |
+| Task 007 | 0 issues | 123/123 passed (+ 3/3 on-device) |
+| Task 008 | **0 issues** | **143/143 passed** (+ 3/3 on-device, 1 skipped) |
 
-Task 007 suite breakdown (12 suites total):
+Task 008 suite breakdown (13 suites total):
 
 - `ai_models_test.dart`: 7
 - `chat_service_test.dart`: 13
@@ -366,9 +460,12 @@ Task 007 suite breakdown (12 suites total):
 - `kitten_avatar_test.dart`: 3
 - `foreground_app_test.dart`: 6
 - `app_awareness_controller_test.dart`: 17
+- `screen_understanding_controller_test.dart`: 13
 - `widget_test.dart`: 1
 
-Plus `integration_test/app_awareness_test.dart`: 3 device tests, which require Usage Access.
+Plus on-device suites: `integration_test/app_awareness_test.dart` (3 tests, requires Usage
+Access) and `integration_test/screen_understanding_test.dart` (4 tests, requires the
+`PROJECT_MEDIA` app-op; the live vision round-trip skips without a Groq API key).
 Note that `flutter test integration_test/...` **uninstalls** the app when it finishes, which also
 clears the granted app-op — so install and grant immediately before each run.
 
@@ -410,6 +507,18 @@ clears the granted app-op — so install and grant immediately before each run.
   (`com.spotify.music` shows as "Music").
 - **No awareness while backgrounded:** polling stops when the app leaves the foreground, so
   awareness resumes with whatever it last saw rather than tracking continuously.
+- **The vision model is only exercised on a machine with an API key.** On this emulator the
+  capture path is fully verified, but nothing has yet confirmed what `qwen/qwen3.8-27b` says
+  about a real screenshot.
+- **Consent is asked every single time.** That is deliberate for privacy, but it means the
+  feature never becomes one-tap in practice; Android's own "remember this decision" option is
+  the only shortcut.
+- **`POST_NOTIFICATIONS` is declared but never requested**, so on Android 13+ the capture
+  notice may not be visible even though the foreground service is running.
+- **A screenshot stays in the conversation.** Only the newest one is re-sent to the model, but
+  older screenshots remain in memory and in the visible chat until the conversation is cleared.
+- **No OCR or accessibility fallback:** if the vision model cannot read something (small text,
+  handwriting), Kitten has no second path to the screen's content.
 - **Application ID & Signing:** still `com.example.kitten` with debug signing.
 
 ## Decisions
@@ -443,10 +552,16 @@ clears the granted app-op — so install and grant immediately before each run.
   `integration_test` suites rather than by tapping guessed screen coordinates.
 - **Concern separation:** app awareness owns the knowledge, `ChatService` merely accepts a
   context string through a callback, so the AI layer stays unaware of Android.
+- **Screen understanding:** MediaProjection behind per-capture consent and a short-lived
+  mediaProjection foreground service, rather than an AccessibilityService. It is strictly
+  one-shot and user-initiated, and the pixels go to Groq's multimodal model as an inline data
+  URL — the trade accepted in exchange for real visual understanding.
+- **Vision is a separate model:** `qwen/qwen3.8-27b` handles image turns while the user's
+  chosen text model stays on every other turn, so a text model never has to be multimodal.
 
 ## Next Task
 
-**Task 008 — Screen understanding with explicit permission.**
+**Task 009 — Assistant tool/function system.**
 
 ## Task History
 
@@ -550,3 +665,29 @@ clears the granted app-op — so install and grant immediately before each run.
   granted; and gating the whole Settings load on that probe made the screen hang in widget
   tests, so the probe now reports in asynchronously
 - **Result:** PASS
+
+### Task 008
+- **Status:** COMPLETED · **Date:** 2026-09-20
+- **Summary:** Implemented on-demand screen understanding. Added a one-shot MediaProjection
+  capture service driven by Android's consent dialog, an abstract `ScreenCaptureService` with a
+  method-channel implementation, and a `ScreenUnderstandingController` that captures once and
+  routes the turn to a vision model. `ChatMessage` gained multimodal content parts and
+  `ChatRequest.withModel` the reroute, so a screenshot arrives as an inline data URL, streams
+  into the normal conversation, and is only ever replayed while it is the newest image.
+- **Files created:** 4 (config, contract, implementation, controller), 1 unit test file, 1
+  integration test, 1 Kotlin service
+- **Files modified:** `chat_message.dart`, `chat_request.dart`, `chat_service.dart`,
+  `ai_config.dart`, `secure_storage_service.dart`, `home_page.dart`, `chat_bubble.dart`,
+  `MainActivity.kt`, `AndroidManifest.xml`
+- **Dependencies added:** none
+- **Testing:** `flutter analyze` — 0 issues; `flutter test` — 143/143 passed;
+  `flutter test integration_test/...` — 3/3 passed on the emulator, 1 skipped (no API key)
+- **On-device:** captured a real JPEG of 31,740 bytes at 1080x2400; the privacy note appeared
+  before the first read and Cancel captured nothing; the turn was confirmed to request the
+  vision model rather than the text model
+- **Bugs found and fixed during verification:** a missing `MediaProjection.Callback` crashed the
+  whole app on the first capture (and the unwrapped capture loop let one exception do it);
+  `densityDpi` was left at 0 so the projection refused to start; the first image callback was
+  treated as a frame and gave up too early; imports were dropped in a rewrite; and the Dart side
+  asked for a `String` where the platform sends bytes
+- **Result:** PASS (live vision answer pending a configured API key)

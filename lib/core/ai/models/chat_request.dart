@@ -28,4 +28,15 @@ class ChatRequest {
         'max_tokens': maxTokens,
         if (stream) 'stream': true,
       };
+
+  /// A copy of this request told to use [model] instead.
+  ///
+  /// Vision models are only good at pictures, so a screen-understanding turn
+  /// asks for a specific multimodal model rather than the user's text model.
+  ChatRequest withModel(String model) => ChatRequest(
+        messages: messages,
+        model: model,
+        temperature: temperature,
+        maxTokens: maxTokens,
+      );
 }

@@ -16,6 +16,19 @@ class AiConfig {
     'openai/gpt-oss-safeguard-20b',
   ];
 
+  /// The model used for screen understanding.
+  ///
+  /// Groq's multimodal model: it accepts image parts alongside text. Chosen
+  /// separately from [defaultModel] so the user's everyday text model never
+  /// has to be vision-capable.
+  static const String visionModel = 'qwen/qwen3.8-27b';
+
+  /// Maximum size, in bytes, of a screenshot sent to the vision model.
+  ///
+  /// Groq rejects requests over 20 MB, and a raw phone screenshot compresses
+  /// far below that, so this is a sanity guard rather than a real limit.
+  static const int maxImageBytes = 4 * 1024 * 1024;
+
   /// Groq Chat Completions API endpoint (OpenAI-compatible).
   static const String groqApiEndpoint =
       'https://api.groq.com/openai/v1/chat/completions';

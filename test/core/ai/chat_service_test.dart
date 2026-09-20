@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:kitten/core/ai/config/ai_config.dart';
 import 'package:kitten/core/ai/models/ai_exception.dart';
 import 'package:kitten/core/ai/models/chat_message.dart';
 import 'package:kitten/core/ai/models/chat_request.dart';
@@ -142,6 +143,63 @@ void main() {
         fakeProvider.lastRequest!.messages.first.content,
         contains('playful'),
       );
+    });
+
+    // ── Screen understanding ────────────────────────────────────
+
+    test('sendMessageWithImage attaches the image and asks the vision model',
+        () async {
+      final fakeProvider = FakeAiProvider(streamChunks: ['A ', 'cat']);
+      final service = ChatService(provider: fakeProvider);
+
+      final reply = await service.sendMessageWithImage(
+        'What is on my screen?',
+        'QUJD',
+      );
+
+      expect(reply?.content, 'A cat');
+      // The everyday text model cannot read images, so the turn is rerouted.
+      expect(fakeProvider.lastRequest!.model, AiConfig.visionModel);
+
+      final userMessage = service.messages.first;
+      expect(userMessage.hasImage, isTrue);
+      expect(userMessage.content, 'What is on my screen?');
+    });
+
+    test('replaying history resends only the newest screenshot', () async {
+      final fakeProvider = FakeAiProvider();
+      final service = ChatService(provider: fakeProvider);
+
+      await service.sendMessageWithImage('first look', 'AAAA');
+      await service.sendMessageWithImage('second look', 'BBBB');
+
+      final sent = fakeProvider.lastRequest!.messages;
+      final withImages = sent.where((m) => m.hasImage).toList();
+
+      expect(withImages.length, 1);
+      expect(withImages.single.imageDataBase64, 'BBBB');
+      // The older turn keeps its text, so the conversation still makes sense.
+      expect(
+        sent.any((m) => m.content == 'first look' && !m.hasImage),
+        isTrue,
+      );
+
+      // Trimming applies to the request only; the visible chat keeps both.
+      expect(service.messages.where((m) => m.hasImage).length, 2);
+    });
+
+    test('a screenshot turn reports a vision failure through lastError',
+        () async {
+      final fakeProvider = FakeAiProvider(
+        shouldThrow: AiException.badResponse('vision model rejected the image'),
+      );
+      final service = ChatService(provider: fakeProvider);
+
+      final reply = await service.sendMessageWithImage('look', 'QUJD');
+
+      expect(reply, isNull);
+      expect(service.lastError, isNotNull);
+      expect(service.assistantState, AssistantState.idle);
     });
 
     test('extra context is appended to the system prompt after the mood', () async {

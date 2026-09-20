@@ -16,6 +16,7 @@ class SecureStorageService {
   static const String _keyWakeWordEnabled = 'voice_wake_word_enabled';
   static const String _keySpeakReplies = 'voice_speak_replies';
   static const String _keyAppAwarenessEnabled = 'awareness_app_enabled';
+  static const String _keyScreenReadExplained = 'screen_read_explained';
 
   /// Saves the Groq API key securely in encrypted storage.
   Future<void> saveGroqApiKey(String apiKey) async {
@@ -93,6 +94,19 @@ class SecureStorageService {
   /// Reads the stored app-awareness preference, or null when never set.
   Future<bool?> getAppAwarenessEnabled() async {
     return _parseStoredBool(await _storage.read(key: _keyAppAwarenessEnabled));
+  }
+
+  /// Stores whether the one-time screen-reading privacy note was shown.
+  Future<void> saveScreenReadExplained(bool shown) async {
+    await _storage.write(
+      key: _keyScreenReadExplained,
+      value: shown ? 'true' : 'false',
+    );
+  }
+
+  /// Reads the screen-reading note flag, or null when never set.
+  Future<bool?> getScreenReadExplained() async {
+    return _parseStoredBool(await _storage.read(key: _keyScreenReadExplained));
   }
 
   static bool? _parseStoredBool(String? value) {

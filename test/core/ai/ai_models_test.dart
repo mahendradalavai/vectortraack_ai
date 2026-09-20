@@ -32,6 +32,55 @@ void main() {
       expect(parsed.content, 'Hello');
     });
 
+    test('a text message serializes its content as a plain string', () {
+      final message = ChatMessage.user('Hello');
+
+      expect(message.hasImage, isFalse);
+      expect(message.toJson()['content'], 'Hello');
+    });
+
+    test('an image message serializes to multimodal content parts', () {
+      final message = ChatMessage.userWithImage('What is this?', 'QUJD');
+
+      expect(message.hasImage, isTrue);
+      final content = message.toJson()['content'] as List<dynamic>;
+      expect(content.length, 2);
+      expect(content[0], {'type': 'text', 'text': 'What is this?'});
+
+      final imagePart = content[1] as Map<String, dynamic>;
+      expect(imagePart['type'], 'image_url');
+      // The image travels inline as a data URL, so no separate upload is needed.
+      expect(
+        (imagePart['image_url'] as Map<String, dynamic>)['url'],
+        'data:image/jpeg;base64,QUJD',
+      );
+    });
+
+    test('withoutImage keeps the text and drops the picture', () {
+      final message = ChatMessage.userWithImage('What is this?', 'QUJD');
+      final textOnly = message.withoutImage();
+
+      expect(textOnly.hasImage, isFalse);
+      expect(textOnly.content, 'What is this?');
+      expect(textOnly.role, ChatRole.user);
+      // A message with no image is already text-only, so it returns itself.
+      expect(identical(textOnly.withoutImage(), textOnly), isTrue);
+    });
+
+    test('withModel overrides the model without touching the messages', () {
+      final request = ChatRequest(messages: [ChatMessage.user('Hi')]);
+      final vision = request.withModel(AiConfig.visionModel);
+
+      expect(vision.model, AiConfig.visionModel);
+      expect(vision.messages, request.messages);
+      expect(
+        vision.toJson(defaultModel: AiConfig.defaultModel)['model'],
+        AiConfig.visionModel,
+      );
+      // The original request is untouched.
+      expect(request.model, isNull);
+    });
+
     test('ChatRequest formats payload with default and custom model', () {
       final requestWithDefault = ChatRequest(
         messages: [ChatMessage.user('Hi')],
