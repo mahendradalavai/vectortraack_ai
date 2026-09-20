@@ -18,8 +18,10 @@ class ChatService extends ChangeNotifier {
   ChatService({
     AiProvider? provider,
     PersonalityService? personality,
+    String? Function()? contextProvider,
   })  : _provider = provider ?? GroqProvider(),
         _ownsPersonality = personality == null,
+        _promptContext = contextProvider,
         personality = personality ?? PersonalityService() {
     // Mood changes should repaint the UI just like new messages do.
     this.personality.addListener(_onPersonalityChanged);
@@ -29,6 +31,11 @@ class ChatService extends ChangeNotifier {
   final PersonalityService personality;
 
   final bool _ownsPersonality;
+
+  /// Supplies extra prompt context for the current turn, such as the app the
+  /// user was last using. A callback keeps this layer unaware of app
+  /// awareness, which owns that knowledge.
+  final String? Function()? _promptContext;
 
   AiProvider _provider;
   final List<ChatMessage> _messages = [];
@@ -193,10 +200,19 @@ class ChatService extends ChangeNotifier {
   }
 
   /// The full payload sent to the provider: system prompt plus history.
-  List<ChatMessage> _conversationPayload() => [
-        ChatMessage.system(personality.buildSystemPrompt()),
-        ..._messages,
-      ];
+  List<ChatMessage> _conversationPayload() {
+    final systemPrompt = personality.buildSystemPrompt();
+    final context = _promptContext?.call()?.trim();
+
+    return [
+      ChatMessage.system(
+        context == null || context.isEmpty
+            ? systemPrompt
+            : '$systemPrompt\n\n$context',
+      ),
+      ..._messages,
+    ];
+  }
 
   void _completeTurn(String reply) {
     personality.onAssistantMessage(reply);

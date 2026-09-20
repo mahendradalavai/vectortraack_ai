@@ -7,21 +7,25 @@ import 'package:kitten/app/app.dart';
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
+  const storageChannel =
+      MethodChannel('plugins.it_nomads.com/flutter_secure_storage');
+  const awarenessChannel = MethodChannel('kitten/app_awareness');
+
   setUp(() {
     // Mock the secure storage platform channel for widget testing
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(
-      const MethodChannel('plugins.it_nomads.com/flutter_secure_storage'),
+      storageChannel,
+      (MethodCall methodCall) async => null,
+    );
+
+    // App awareness has no native side in a widget test; answer it explicitly
+    // rather than leaving the call unanswered.
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(
+      awarenessChannel,
       (MethodCall methodCall) async {
-        if (methodCall.method == 'read') {
-          return null;
-        }
-        if (methodCall.method == 'write') {
-          return null;
-        }
-        if (methodCall.method == 'delete') {
-          return null;
-        }
+        if (methodCall.method == 'hasUsageAccess') return false;
         return null;
       },
     );
@@ -29,10 +33,9 @@ void main() {
 
   tearDown(() {
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-        .setMockMethodCallHandler(
-      const MethodChannel('plugins.it_nomads.com/flutter_secure_storage'),
-      null,
-    );
+        .setMockMethodCallHandler(storageChannel, null);
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(awarenessChannel, null);
   });
 
   testWidgets('KittenApp launches, shows home page with chat input, and navigates to settings', (

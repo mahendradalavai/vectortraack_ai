@@ -15,6 +15,7 @@ class SecureStorageService {
   static const String _keySelectedModel = 'ai_selected_model';
   static const String _keyWakeWordEnabled = 'voice_wake_word_enabled';
   static const String _keySpeakReplies = 'voice_speak_replies';
+  static const String _keyAppAwarenessEnabled = 'awareness_app_enabled';
 
   /// Saves the Groq API key securely in encrypted storage.
   Future<void> saveGroqApiKey(String apiKey) async {
@@ -79,6 +80,19 @@ class SecureStorageService {
   /// Reads the stored spoken-replies preference, or null when never set.
   Future<bool?> getSpeakReplies() async {
     return _parseStoredBool(await _storage.read(key: _keySpeakReplies));
+  }
+
+  /// Stores whether Kitten should notice which app the user is using.
+  Future<void> saveAppAwarenessEnabled(bool enabled) async {
+    await _storage.write(
+      key: _keyAppAwarenessEnabled,
+      value: enabled ? 'true' : 'false',
+    );
+  }
+
+  /// Reads the stored app-awareness preference, or null when never set.
+  Future<bool?> getAppAwarenessEnabled() async {
+    return _parseStoredBool(await _storage.read(key: _keyAppAwarenessEnabled));
   }
 
   static bool? _parseStoredBool(String? value) {

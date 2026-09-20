@@ -144,6 +144,50 @@ void main() {
       );
     });
 
+    test('extra context is appended to the system prompt after the mood', () async {
+      final fakeProvider = FakeAiProvider();
+      final service = ChatService(
+        provider: fakeProvider,
+        contextProvider: () => 'CURRENT CONTEXT: the user was in Chrome.',
+      );
+
+      await service.sendMessage('hi');
+
+      final systemPrompt = fakeProvider.lastRequest!.messages.first.content;
+      expect(systemPrompt, contains(KittenSystemPrompt.prompt));
+      expect(
+        systemPrompt,
+        contains('CURRENT CONTEXT: the user was in Chrome.'),
+      );
+      // Context is added under the persona and mood, never instead of them.
+      expect(
+        systemPrompt.indexOf('CURRENT MOOD:'),
+        lessThan(systemPrompt.indexOf('CURRENT CONTEXT:')),
+      );
+    });
+
+    test('the context provider is asked every turn and may stay silent', () async {
+      String? context;
+      final fakeProvider = FakeAiProvider();
+      final service = ChatService(
+        provider: fakeProvider,
+        contextProvider: () => context,
+      );
+
+      await service.sendMessage('hi');
+      expect(
+        fakeProvider.lastRequest!.messages.first.content,
+        isNot(contains('CURRENT CONTEXT')),
+      );
+
+      context = 'CURRENT CONTEXT: the user was in Chrome.';
+      await service.sendMessage('still there?');
+      expect(
+        fakeProvider.lastRequest!.messages.first.content,
+        contains('CURRENT CONTEXT'),
+      );
+    });
+
     test('sendMessage sets safe error message and returns state to idle on failure', () async {
       final fakeProvider = FakeAiProvider(
         shouldThrow: AiException.missingApiKey(),

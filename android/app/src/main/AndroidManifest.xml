@@ -1,4 +1,5 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
     <application
         android:label="kitten"
         android:name="${applicationName}"
@@ -38,6 +39,12 @@
          In particular, this is used by the Flutter engine in io.flutter.plugin.text.ProcessTextPlugin. -->
     <!-- Voice input: required by speech_to_text for "Hey Kitten"/Talk. -->
     <uses-permission android:name="android.permission.RECORD_AUDIO"/>
+    <!-- App awareness: a special app-op the user grants in system settings.
+         Lint flags it as a protected permission, which is expected here: it is
+         declared so the settings screen lists Kitten, not to be auto-granted. -->
+    <uses-permission
+        android:name="android.permission.PACKAGE_USAGE_STATS"
+        tools:ignore="ProtectedPermissions"/>
     <queries>
         <intent>
             <action android:name="android.intent.action.PROCESS_TEXT"/>

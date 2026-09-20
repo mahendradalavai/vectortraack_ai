@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import 'package:kitten/core/ai/services/chat_service.dart';
+import 'package:kitten/core/awareness/services/app_awareness_controller.dart';
 import 'package:kitten/core/constants/app_constants.dart';
 import 'package:kitten/core/models/assistant_state.dart';
 import 'package:kitten/core/voice/config/voice_config.dart';
@@ -17,12 +18,15 @@ import 'package:kitten/shared/widgets/assistant_status_indicator.dart';
 /// Integrates the Kitten avatar, status indicator, voice placeholder,
 /// text conversation history, and text input field connected to the AI provider.
 class HomePage extends StatefulWidget {
-  const HomePage({super.key, this.voiceController});
+  const HomePage({super.key, this.voiceController, this.awarenessController});
 
   /// Optional injected [VoiceController] for testing and dependency injection.
   ///
   /// It also supplies the [ChatService] used for the text conversation.
   final VoiceController? voiceController;
+
+  /// Optional injected [AppAwarenessController] for testing.
+  final AppAwarenessController? awarenessController;
 
   @override
   State<HomePage> createState() => _HomePageState();
@@ -31,6 +35,11 @@ class HomePage extends StatefulWidget {
 class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   late final VoiceController _voice;
   late final ChatService _chatService;
+  late final AppAwarenessController _awareness;
+
+  /// The chat service we built ourselves, and so must dispose.
+  ChatService? _ownedChatService;
+
   final TextEditingController _textController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
 
@@ -43,13 +52,27 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   @override
   void initState() {
     super.initState();
-    _voice = widget.voiceController ?? VoiceController();
+    _awareness = widget.awarenessController ?? AppAwarenessController();
+    _awareness.addListener(_onAwarenessUpdate);
+
+    if (widget.voiceController == null) {
+      // Kitten's replies may mention the app the user was last using, so the
+      // conversation is given a way to read that context.
+      final chatService = ChatService(
+        contextProvider: _awareness.buildPromptContext,
+      );
+      _ownedChatService = chatService;
+      _voice = VoiceController(chatService: chatService);
+    } else {
+      _voice = widget.voiceController!;
+    }
     _chatService = _voice.chatService;
     _voice.addListener(_onVoiceUpdate);
     WidgetsBinding.instance.addObserver(this);
 
-    // Re-apply the user's saved voice preferences.
+    // Re-apply the user's saved preferences.
     unawaited(_voice.restorePreferences());
+    unawaited(_awareness.restorePreferences());
 
     _idleTicker = Timer.periodic(
       const Duration(seconds: 15),
@@ -65,6 +88,11 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     if (widget.voiceController == null) {
       _voice.dispose();
     }
+    _ownedChatService?.dispose();
+    _awareness.removeListener(_onAwarenessUpdate);
+    if (widget.awarenessController == null) {
+      _awareness.dispose();
+    }
     _textController.dispose();
     _scrollController.dispose();
     super.dispose();
@@ -72,12 +100,19 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    // Never hold the microphone while the app is not in the foreground.
+    // Never hold the microphone while the app is not in the foreground, and
+    // stop reading usage stats while nobody can see the result.
     if (state == AppLifecycleState.resumed) {
-      _voice.resume();
+      unawaited(_voice.resume());
+      unawaited(_awareness.resume());
     } else {
-      _voice.suspend();
+      unawaited(_voice.suspend());
+      unawaited(_awareness.suspend());
     }
+  }
+
+  void _onAwarenessUpdate() {
+    if (mounted) setState(() {});
   }
 
   /// True while Kitten is thinking or streaming a reply.
@@ -177,8 +212,11 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   void _openSettings() {
     Navigator.of(context).push(
       MaterialPageRoute<void>(
-        // Hand over the live voice session so Settings switches apply at once.
-        builder: (_) => SettingsPage(voiceController: _voice),
+        // Hand over the live controllers so Settings switches apply at once.
+        builder: (_) => SettingsPage(
+          voiceController: _voice,
+          awarenessController: _awareness,
+        ),
       ),
     );
   }
@@ -298,6 +336,28 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                           'Waiting for '
                           '"${VoiceConfig.wakePhrases.first}"...',
                           style: tt.bodySmall?.copyWith(color: cs.primary),
+                        ),
+                      ],
+                    ),
+                  ],
+
+                  // The app Kitten last saw the user in, once it knows one.
+                  if (_awareness.currentApp != null) ...[
+                    const SizedBox(height: 10),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(
+                          Icons.visibility_outlined,
+                          size: 14,
+                          color: cs.onSurfaceVariant,
+                        ),
+                        const SizedBox(width: 6),
+                        Text(
+                          'Last app: ${_awareness.currentApp!.displayName}',
+                          style: tt.bodySmall?.copyWith(
+                            color: cs.onSurfaceVariant,
+                          ),
                         ),
                       ],
                     ),

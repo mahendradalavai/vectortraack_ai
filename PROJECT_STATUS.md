@@ -6,7 +6,7 @@
 - **Framework:** Flutter 3.47.5 (stable channel)
 - **Target platform:** Android (primary), with iOS/Web/Windows/macOS/Linux scaffolding present
 - **Version control:** Git repository. Baseline `492be59`, Task 003 closure `4ed421c`.
-- **Current development stage:** Task 006 complete — Kitten is now a procedurally drawn character with an evolving mood that colours both its expression and its replies, plus idle behaviours (breathing, blinking, ear twitches, a swaying tail) and dozing off when left alone.
+- **Current development stage:** Task 007 complete — Kitten can now see which app you were last using (with the user's explicit Usage Access grant), show it on the home screen, and fold it into its own context when replying.
 
 ## Environment
 
@@ -37,10 +37,70 @@
 4. **Task 004 — Voice Input / Output** — hands-free voice conversation, spoken replies, and graceful degradation to text-only mode.
 5. **Task 005 — "Hey Kitten" Activation** — opt-in, foreground-only wake-word listening with remainder-as-command.
 6. **Task 006 — Kitten Animation / Personality System** — procedural animated character and an evolving mood described below.
+7. **Task 007 — Android App-Awareness** — Android usage-stat tracking behind an explicit permission, surfaced in the UI and in Kitten's prompt, described below.
 
 ## Current Task
 
-**Task 006 — Kitten Animation / Personality System**
+**Task 007 — Android App-Awareness**
+Status: **COMPLETED**
+
+### What was built (Task 007)
+
+- **Native channel** (`kitten/app_awareness` in `MainActivity.kt`) — Android's usage APIs need the
+  `GET_USAGE_STATS` app-op, which has no plugin-visible equivalent, so the handful of platform
+  lines sit beside the app's own activity instead of adding another dependency. Kotlin-only code
+  is deliberately optional: every method fails soft, so a `MissingPluginException` or platform
+  error degrades to "no awareness" rather than crashing.
+- **`AppAwarenessService` contract** — `isSupported`, `hasUsageAccess`, `openUsageAccessSettings`,
+  and `foregroundApp`, with `MethodChannelAppAwarenessService` as the only implementation, so the
+  polling and permission logic is testable without Android.
+- **`AppAwarenessController`** — a `ChangeNotifier` that gates everything on the permission, polls
+  the foreground app every 5 seconds, and contributes prompt context.
+- **Explicit permission only (selected behaviour):** Usage Access is a *special* permission that
+  cannot be granted by a normal dialog, so the app never claims to work without it: enabling
+  while it is missing reverts the switch, explains why, and deep-links to the system screen.
+  Returning to the app finishes the enable the user asked for.
+- **Shown to the user (selected behaviour):** the home screen shows a "Last app: Chrome" hint,
+  and Settings has a real App Awareness switch, a Usage Access status row with a Grant action,
+  and a "Last app seen" row with the package id.
+- **Used by Kitten (selected behaviour):** `ChatService` accepts a `contextProvider` callback and
+  appends its output to the system prompt beneath the persona and mood, so a reply can refer to
+  the app naturally. The text explicitly states Kitten *cannot see the contents* of the screen.
+- **No `QUERY_ALL_PACKAGES` (selected behaviour):** only `PACKAGE_USAGE_STATS` is declared. When
+  Android withholds an app's label, `ForegroundApp.displayName` derives a readable name from the
+  package id (skipping meaningless segments such as `android`/`apps`).
+- **Never reports itself:** the last *other* app is reported, both because Kitten is usually the
+  foreground app while it asks and because that is the app the user actually cares about. The
+  query is bounded to a 10-minute window so the answer stays plausibly recent.
+- **Privacy hygiene:** the microphone distinction applies here too — polling stops whenever the
+  app leaves the foreground, and if the permission is revoked while away, awareness turns itself
+  off rather than reporting a stale app.
+
+### On-device verification (Pixel 7, Android 17 / API 37)
+
+Verified with a real device integration test (`integration_test/app_awareness_test.dart`), which
+requires no screen-coordinate guessing because it can find widgets and read the platform channel
+directly. Reproduce with:
+
+```bash
+adb install -r build/app/outputs/flutter-apk/app-debug.apk
+adb shell appops set com.example.kitten GET_USAGE_STATS allow
+adb shell monkey -p com.android.chrome -c android.intent.category.LAUNCHER 1
+flutter test integration_test/app_awareness_test.dart -d emulator-5554
+```
+
+- The channel reported `hasUsageAccess() == true` and detected a real foreground app:
+  **`com.android.chrome`, shown as "Chrome"**.
+- The controller turned that into prompt context containing the app's display name.
+- The Settings screen showed `Granted` *before* the user touched anything, the switch enabled
+  awareness when tapped, and the "Last app seen" row appeared.
+- All three integration tests passed; the Kotlin compiled cleanly.
+- **Not verified on device:** a *second* app other than Chrome, and behaviour when the user
+  revokes Usage Access mid-session (covered by unit tests).
+
+---
+
+### Previous task — Task 006 — Kitten Animation / Personality System
 Status: **COMPLETED**
 
 ### What was built (Task 006)
@@ -150,7 +210,7 @@ Status: **COMPLETED**
 
 ## Pending Tasks
 
-Awaiting instructions for Task 007 (Android app-awareness).
+Awaiting instructions for Task 008 (screen understanding with explicit permission).
 
 ## Features Planned
 
@@ -158,8 +218,8 @@ The following are planned but **NOT yet implemented**:
 
 - Floating kitten overlay
 - Background listening / service
-- App detection / awareness
-- Context-aware questions
+- Usage-history analysis beyond the single most recent app
+- Context-aware questions driven by the app (the context is now available; richer prompts are not)
 - Screen capture / understanding
 - Phone assistant commands (device settings, volume, etc.)
 - Alarm & timer commands
@@ -199,6 +259,13 @@ The following are planned but **NOT yet implemented**:
 | `lib/core/voice/services/voice_controller.dart` | 004 | Hands-free listen -> chat -> speak loop |
 | `lib/core/voice/util/voice_text_cleaner.dart` | 004 | Strips stage directions/emoji before speaking |
 | `lib/core/voice/util/wake_word_matcher.dart` | 005 | Pure wake-phrase matcher with remainder extraction |
+| `lib/core/awareness/models/foreground_app.dart` | 007 | Foreground app model with package-name fallback naming |
+| `lib/core/awareness/services/app_awareness_service.dart` | 007 | Abstract app-awareness contract |
+| `lib/core/awareness/services/method_channel_app_awareness_service.dart` | 007 | Native-channel implementation |
+| `lib/core/awareness/services/app_awareness_controller.dart` | 007 | Permission gating, polling, and prompt context |
+| `test/core/awareness/foreground_app_test.dart` | 007 | Display-name derivation and equality tests |
+| `test/core/awareness/app_awareness_controller_test.dart` | 007 | Permission, polling, persistence, and context tests |
+| `integration_test/app_awareness_test.dart` | 007 | On-device verification of the channel and the Settings flow |
 | `lib/core/personality/models/kitten_mood.dart` | 006 | Mood enum carrying label and prompt fragment |
 | `lib/core/personality/services/personality_service.dart` | 006 | Rule-based mood and rapport tracker |
 | `test/core/personality/personality_service_test.dart` | 006 | Mood rules, idling, and prompt integration tests |
@@ -233,7 +300,13 @@ The following are planned but **NOT yet implemented**:
 | `lib/core/ai/prompts/kitten_system_prompt.dart` | 006 | Added `build()` to append the live mood below the scope constraints |
 | `lib/core/ai/services/chat_service.dart` | 006 | Owns `PersonalityService`, feeds it each turn, and uses its prompt |
 | `lib/features/home/presentation/pages/home_page.dart` | 006 | Passes the mood to the avatar and ages it on a ticker |
-| `android/app/src/main/AndroidManifest.xml` | 004 | Added `RECORD_AUDIO` and speech/TTS `<queries>` visibility |
+| `lib/core/ai/services/chat_service.dart` | 007 | Accepts a `contextProvider` and appends it to the system prompt |
+| `lib/features/home/presentation/pages/home_page.dart` | 007 | Owns the awareness controller, shows the last-app hint, suspends polling on background |
+| `lib/features/settings/presentation/pages/settings_page.dart` | 007 | Real App Awareness switch, Usage Access status, and last-app row |
+| `lib/core/services/secure_storage_service.dart` | 007 | Persists the app-awareness preference |
+| `android/app/src/main/kotlin/com/example/kitten/MainActivity.kt` | 007 | Hosts the `kitten/app_awareness` method channel |
+| `test/widget_test.dart` | 007 | Mocks the awareness channel so Settings does not hang waiting on it |
+| `android/app/src/main/AndroidManifest.xml` | 004, 007 | Added `RECORD_AUDIO` and speech/TTS `<queries>` visibility; then `PACKAGE_USAGE_STATS` |
 | `test/widget_test.dart` | 002, 003 | Covers chat input, settings navigation, AI settings section |
 
 ## Dependencies
@@ -247,6 +320,7 @@ The following are planned but **NOT yet implemented**:
 | `speech_to_text` | ^7.5.0 | On-device speech recognition for voice input |
 | `flutter_tts` | ^4.2.5 | Speech synthesis for spoken replies |
 | `flutter_test` (dev) | SDK | Widget & unit testing |
+| `integration_test` (dev) | SDK | Drives the app on a real device to verify platform behaviour |
 | `flutter_lints` (dev) | ^6.0.0 | Static analysis rules |
 
 ## Permissions
@@ -256,9 +330,15 @@ The following are planned but **NOT yet implemented**:
 | Permission | Task | Purpose |
 |------------|------|---------|
 | `android.permission.RECORD_AUDIO` | 004 | Capturing the user's voice for speech recognition |
+| `android.permission.PACKAGE_USAGE_STATS` | 007 | Reading which app the user was last using |
 
-Requested at runtime when the user first taps Talk; denied or unavailable speech input
-degrades the app to text-only mode rather than failing.
+`RECORD_AUDIO` is requested at runtime when the user first taps Talk; denied or unavailable
+speech input degrades the app to text-only mode rather than failing.
+
+`PACKAGE_USAGE_STATS` is a **special** permission: it cannot be granted by a runtime dialog. The
+user must enable it in Settings -> Special app access -> Usage access, so the app deep-links
+there and never pretends to work without it. `QUERY_ALL_PACKAGES` is deliberately **not**
+requested.
 
 ## Testing
 
@@ -270,9 +350,10 @@ degrades the app to text-only mode rather than failing.
 | Task 003 (closure) | 0 issues | 42/42 passed |
 | Task 004 | 0 issues | 61/61 passed |
 | Task 005 | 0 issues | 81/81 passed |
-| Task 006 | **0 issues** | **98/98 passed** |
+| Task 006 | 0 issues | 98/98 passed |
+| Task 007 | **0 issues** | **123/123 passed** (+ 3/3 on-device) |
 
-Task 006 suite breakdown (10 suites total):
+Task 007 suite breakdown (12 suites total):
 
 - `ai_models_test.dart`: 7
 - `chat_service_test.dart`: 13
@@ -283,7 +364,13 @@ Task 006 suite breakdown (10 suites total):
 - `wake_word_matcher_test.dart`: 10
 - `personality_service_test.dart`: 13
 - `kitten_avatar_test.dart`: 3
+- `foreground_app_test.dart`: 6
+- `app_awareness_controller_test.dart`: 17
 - `widget_test.dart`: 1
+
+Plus `integration_test/app_awareness_test.dart`: 3 device tests, which require Usage Access.
+Note that `flutter test integration_test/...` **uninstalls** the app when it finishes, which also
+clears the granted app-op — so install and grant immediately before each run.
 
 ## Security Review Result
 
@@ -293,6 +380,8 @@ Task 006 suite breakdown (10 suites total):
   so no raw provider payload or credential reaches the user.
 - The microphone is opened only when the user starts a voice session, and is released when
   the session stops or the app leaves the foreground.
+- App awareness reads only *which* app is in the foreground (a package id), never its contents,
+  and only while the user has explicitly granted Usage Access and Kitten is on screen.
 
 ## Known Problems & Limitations
 
@@ -313,6 +402,14 @@ Task 006 suite breakdown (10 suites total):
   There are no golden-image tests, so pixel-level regressions would not be caught.
 - **Mood is session-only:** it is derived from the live conversation and is not persisted, so
   Kitten always starts curious.
+- **App awareness is coarse:** it reports only the single most recently used *other* app within
+  a 10-minute window, and only on Android. It cannot tell what the user is doing *inside* that
+  app — that is Task 008, and it explicitly does not claim otherwise.
+- **App labels depend on Android's package visibility.** Without `QUERY_ALL_PACKAGES`, many
+  labels are withheld, so names fall back to a readable derivation of the package id
+  (`com.spotify.music` shows as "Music").
+- **No awareness while backgrounded:** polling stops when the app leaves the foreground, so
+  awareness resumes with whatever it last saw rather than tracking continuously.
 - **Application ID & Signing:** still `com.example.kitten` with debug signing.
 
 ## Decisions
@@ -339,10 +436,17 @@ Task 006 suite breakdown (10 suites total):
 - **Personality:** mood is computed by explicit, testable rules over the conversation rather
   than by asking the model how it feels, and is appended to the system prompt beneath the scope
   constraints.
+- **App awareness:** Android `UsageStats` through a small native channel and the special
+  `GET_USAGE_STATS` app-op, rather than `QUERY_ALL_PACKAGES`. It reports the most recent *other*
+  app, is strictly opt-in, and stops when the permission or the foreground state is lost.
+- **Platform verification:** platform-dependent behaviour is verified with on-device
+  `integration_test` suites rather than by tapping guessed screen coordinates.
+- **Concern separation:** app awareness owns the knowledge, `ChatService` merely accepts a
+  context string through a callback, so the AI layer stays unaware of Android.
 
 ## Next Task
 
-**Task 007 — Android app-awareness.**
+**Task 008 — Screen understanding with explicit permission.**
 
 ## Task History
 
@@ -421,4 +525,28 @@ Task 006 suite breakdown (10 suites total):
 - **Testing:** `flutter analyze` — 0 issues; `flutter test` — 98/98 passed
 - **Visual check:** web preview confirmed the cat renders correctly and that the sleepy mood
   engages after the idle threshold; a whisker geometry bug was found and fixed this way
+- **Result:** PASS
+
+### Task 007
+- **Status:** COMPLETED · **Date:** 2026-09-20
+- **Summary:** Implemented Android app-awareness. Added a native `kitten/app_awareness` method
+  channel backed by `UsageStatsManager`, an abstract `AppAwarenessService` with a method-channel
+  implementation, and an `AppAwarenessController` that gates everything on the special Usage
+  Access permission and polls the foreground app. `ChatService` gained a `contextProvider` so the
+  last-used app is folded into the system prompt, and the home screen and Settings both surface
+  it with a real switch and a permission action.
+- **Files created:** 4 (model, contract, implementation, controller), 2 unit test files, plus an
+  on-device integration test
+- **Files modified:** `MainActivity.kt`, `AndroidManifest.xml`, `chat_service.dart`,
+  `secure_storage_service.dart`, `home_page.dart`, `settings_page.dart`, `widget_test.dart`,
+  `pubspec.yaml`
+- **Dependencies added:** `integration_test` (dev, SDK)
+- **Testing:** `flutter analyze` — 0 issues; `flutter test` — 123/123 passed;
+  `flutter test integration_test/...` — 3/3 passed on the emulator
+- **On-device:** detected `com.android.chrome` as "Chrome"; the Settings switch enabled
+  awareness and the last-app row appeared; the screen showed `Granted` before any interaction
+- **Bugs found and fixed during verification:** the controller never checked the permission until
+  the switch was flipped, so Settings showed "grant Usage access" even when it was already
+  granted; and gating the whole Settings load on that probe made the screen hang in widget
+  tests, so the probe now reports in asynchronously
 - **Result:** PASS
