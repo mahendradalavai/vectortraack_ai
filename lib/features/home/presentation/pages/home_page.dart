@@ -1,8 +1,11 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import 'package:kitten/core/ai/services/chat_service.dart';
 import 'package:kitten/core/constants/app_constants.dart';
 import 'package:kitten/core/models/assistant_state.dart';
+import 'package:kitten/core/voice/config/voice_config.dart';
 import 'package:kitten/core/voice/services/voice_controller.dart';
 import 'package:kitten/features/home/presentation/widgets/chat_bubble.dart';
 import 'package:kitten/features/kitten/presentation/widgets/kitten_avatar.dart';
@@ -41,6 +44,9 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     _chatService = _voice.chatService;
     _voice.addListener(_onVoiceUpdate);
     WidgetsBinding.instance.addObserver(this);
+
+    // Re-apply the user's saved voice preferences.
+    unawaited(_voice.restorePreferences());
   }
 
   @override
@@ -58,8 +64,10 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     // Never hold the microphone while the app is not in the foreground.
-    if (state != AppLifecycleState.resumed && _voice.isActive) {
-      _voice.stop();
+    if (state == AppLifecycleState.resumed) {
+      _voice.resume();
+    } else {
+      _voice.suspend();
     }
   }
 
@@ -159,7 +167,10 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
   void _openSettings() {
     Navigator.of(context).push(
-      MaterialPageRoute<void>(builder: (_) => const SettingsPage()),
+      MaterialPageRoute<void>(
+        // Hand over the live voice session so Settings switches apply at once.
+        builder: (_) => SettingsPage(voiceController: _voice),
+      ),
     );
   }
 
@@ -257,6 +268,28 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                       AssistantStatusIndicator(state: state),
                     ],
                   ),
+
+                  // Wake-word hint, shown only while actually waiting.
+                  if (_voice.isWatchingForWakeWord) ...[
+                    const SizedBox(height: 10),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(
+                          Icons.hearing_outlined,
+                          size: 16,
+                          color: cs.primary,
+                        ),
+                        const SizedBox(width: 6),
+                        Text(
+                          'Waiting for '
+                          '"${VoiceConfig.wakePhrases.first}"...',
+                          style: tt.bodySmall?.copyWith(color: cs.primary),
+                        ),
+                      ],
+                    ),
+                  ],
+
                   const SizedBox(height: 20),
 
                   // Conversation history or placeholder

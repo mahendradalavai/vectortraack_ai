@@ -47,19 +47,29 @@ class DeviceSpeechService implements SpeechService {
   }
 
   @override
-  Future<void> listen({required SpeechResultCallback onResult}) async {
+  Future<void> listen({
+    required SpeechResultCallback onResult,
+    SpeechListenMode mode = SpeechListenMode.dictation,
+  }) async {
     if (!_available) return;
+
+    final spottingWakeWord = mode == SpeechListenMode.command;
 
     await _speech.listen(
       onResult: (SpeechRecognitionResult result) =>
           onResult(result.recognizedWords, result.finalResult),
       listenOptions: SpeechListenOptions(
-        listenFor: VoiceConfig.listenFor,
-        pauseFor: VoiceConfig.pauseFor,
+        listenFor:
+            spottingWakeWord ? VoiceConfig.wakeListenFor : VoiceConfig.listenFor,
+        pauseFor:
+            spottingWakeWord ? VoiceConfig.wakePauseFor : VoiceConfig.pauseFor,
         localeId: _localeId,
         partialResults: true,
         cancelOnError: true,
-        listenMode: ListenMode.dictation,
+        // The command engine is tuned for short phrases, which suits spotting
+        // a wake phrase far better than the dictation engine.
+        listenMode:
+            spottingWakeWord ? ListenMode.confirmation : ListenMode.dictation,
       ),
     );
   }

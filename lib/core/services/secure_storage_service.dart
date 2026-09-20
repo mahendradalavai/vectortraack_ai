@@ -13,6 +13,8 @@ class SecureStorageService {
 
   static const String _keyGroqApiKey = 'groq_api_key';
   static const String _keySelectedModel = 'ai_selected_model';
+  static const String _keyWakeWordEnabled = 'voice_wake_word_enabled';
+  static const String _keySpeakReplies = 'voice_speak_replies';
 
   /// Saves the Groq API key securely in encrypted storage.
   Future<void> saveGroqApiKey(String apiKey) async {
@@ -48,6 +50,40 @@ class SecureStorageService {
   /// Retrieves the user-selected AI model name, or null if using default.
   Future<String?> getSelectedModel() async {
     return _storage.read(key: _keySelectedModel);
+  }
+
+  /// Stores whether Kitten should watch for its wake phrase.
+  ///
+  /// Non-secret preferences live here too, so the app needs only one storage
+  /// dependency; the value is simply encrypted alongside the API key.
+  Future<void> saveWakeWordEnabled(bool enabled) async {
+    await _storage.write(
+      key: _keyWakeWordEnabled,
+      value: enabled ? 'true' : 'false',
+    );
+  }
+
+  /// Reads the stored wake-word preference, or null when never set.
+  Future<bool?> getWakeWordEnabled() async {
+    return _parseStoredBool(await _storage.read(key: _keyWakeWordEnabled));
+  }
+
+  /// Stores whether Kitten should read its replies aloud.
+  Future<void> saveSpeakReplies(bool enabled) async {
+    await _storage.write(
+      key: _keySpeakReplies,
+      value: enabled ? 'true' : 'false',
+    );
+  }
+
+  /// Reads the stored spoken-replies preference, or null when never set.
+  Future<bool?> getSpeakReplies() async {
+    return _parseStoredBool(await _storage.read(key: _keySpeakReplies));
+  }
+
+  static bool? _parseStoredBool(String? value) {
+    if (value == null) return null;
+    return value == 'true';
   }
 
   /// Returns a secure masked representation of an API key.

@@ -6,7 +6,7 @@
 - **Framework:** Flutter 3.47.5 (stable channel)
 - **Target platform:** Android (primary), with iOS/Web/Windows/macOS/Linux scaffolding present
 - **Version control:** Git repository. Baseline `492be59`, Task 003 closure `4ed421c`.
-- **Current development stage:** Task 004 complete — hands-free voice conversation. Kitten listens, answers, and speaks its replies aloud, cycling automatically between turns.
+- **Current development stage:** Task 005 complete — voice conversation plus "Hey Kitten" wake-word activation. Kitten can be woken by voice, answers aloud, and cycles automatically between turns; wake listening is opt-in and foreground-only.
 
 ## Environment
 
@@ -34,14 +34,51 @@
 1. **Task 001 — Project Initialization & Status System** — project inspection, status doc, clean baseline.
 2. **Task 002 — Create the Kitten App Foundation** — feature-based architecture, home screen, animated avatar, `AssistantState` model, settings placeholder, Material 3 dark mode.
 3. **Task 003 — Groq AI Provider Foundation** — pluggable `AiProvider`, isolated `GroqProvider`, encrypted key storage with masking, personality prompt, streaming text conversation UI, settings with connection testing. Closed out with Git init, doc fixes, typed errors, SSE token streaming, and disposal cleanups.
-4. **Task 004 — Voice Input / Output** — hands-free voice conversation described below.
+4. **Task 004 — Voice Input / Output** — hands-free voice conversation, spoken replies, and graceful degradation to text-only mode.
+5. **Task 005 — "Hey Kitten" Activation** — opt-in, foreground-only wake-word listening with remainder-as-command described below.
 
 ## Current Task
 
-**Task 004 — Voice Input / Output**
+**Task 005 — "Hey Kitten" Activation**
 Status: **COMPLETED**
 
-### What was built
+### What was built (Task 005)
+
+- **Wake-word matcher** (`wake_word_matcher.dart`) — a pure function that scans a transcript
+  for the wake phrase, tolerating casing, punctuation, and spacing. It returns any text spoken
+  *after* the phrase as a usable question.
+- **Wake mode in `VoiceController`** — an explicit `VoiceMode` state machine
+  (`idle` / `watchingForWakeWord` / `conversation`). There is only one recogniser on the
+  device, so the wake watch and the conversation loop are coordinated in one place instead of
+  competing for the microphone.
+- **Remainder-as-command (selected behaviour):** "Hey Kitten, what's the weather?" is
+  answered immediately; a bare "Hey Kitten" just opens the microphone for a separate question.
+- **Opt-in and foreground-only (selected behaviours):** wake listening is off by default, and
+  `suspend()`/`resume()` close and re-arm the microphone as the app leaves and returns to the
+  foreground. True background listening remains Task 012.
+- **Listen modes:** the STT contract gained a vendor-neutral `SpeechListenMode`, so wake
+  spotting uses the command-tuned engine while conversations use dictation.
+- **Settings:** the Wake Word and Speak Replies placeholders are now real, persisted switches.
+  If speech is unavailable the Wake Word switch refuses to claim it is listening and reverts.
+- **Persistence:** preferences are stored through `SecureStorageService` (no second storage
+  dependency) and re-applied at startup by `restorePreferences()`.
+
+### On-device verification (Pixel 7, Android 17 / API 37)
+
+- Wake listening is **off at startup** — zero recognition windows while idle.
+- Toggling the Wake Word switch on started recognition immediately, cycling on the wake pause.
+- After a full app restart the saved preference **re-armed listening automatically**.
+- Toggling it off stopped recognition, and it stayed off across a further restart.
+- No Flutter exceptions at any point.
+- **Not verified on device:** recognising an actual spoken wake phrase (the emulator has no
+  microphone input). Phrase matching is covered by unit tests instead.
+
+---
+
+### Previous task — Task 004 — Voice Input / Output
+Status: **COMPLETED**
+
+### What was built (Task 004)
 
 - **Voice layer** under `lib/core/voice/`, mirroring the existing AI layer design:
   - `SpeechService` / `TtsService` abstract contracts so the conversation loop is
@@ -77,16 +114,12 @@ Status: **COMPLETED**
 
 ## Pending Tasks
 
-Awaiting instructions for Task 005.
-
-**Recorded decision for Task 005:** the "Hey Kitten" wake word will use always-on
-speech-to-text (reusing this task's `SpeechService`), not an on-device wake-word engine.
+Awaiting instructions for Task 006 (kitten animation / personality system).
 
 ## Features Planned
 
 The following are planned but **NOT yet implemented**:
 
-- "Hey Kitten" wake word detection (always-on STT)
 - Floating kitten overlay
 - Background listening / service
 - App detection / awareness
@@ -129,12 +162,14 @@ The following are planned but **NOT yet implemented**:
 | `lib/core/voice/services/flutter_tts_service.dart` | 004 | `flutter_tts` implementation |
 | `lib/core/voice/services/voice_controller.dart` | 004 | Hands-free listen -> chat -> speak loop |
 | `lib/core/voice/util/voice_text_cleaner.dart` | 004 | Strips stage directions/emoji before speaking |
+| `lib/core/voice/util/wake_word_matcher.dart` | 005 | Pure wake-phrase matcher with remainder extraction |
 | `test/core/ai/ai_models_test.dart` | 003 | AI models, exceptions, prompts, config tests |
 | `test/core/ai/groq_provider_test.dart` | 003 | Provider HTTP + SSE streaming tests |
 | `test/core/ai/chat_service_test.dart` | 003 | Chat streaming, cancellation, error classification |
 | `test/core/services/secure_storage_service_test.dart` | 003 | Key masking and storage abstraction tests |
 | `test/core/voice/voice_controller_test.dart` | 004 | Hands-free loop, degradation, and lifecycle tests |
 | `test/core/voice/voice_text_cleaner_test.dart` | 004 | Speech text cleaning tests |
+| `test/core/voice/wake_word_matcher_test.dart` | 005 | Wake-phrase matching and remainder tests |
 
 ## Files Modified
 
@@ -148,7 +183,12 @@ The following are planned but **NOT yet implemented**:
 | `lib/core/ai/providers/groq_provider.dart` | 003 closure | Added SSE streaming, shared error mapping, `dispose` |
 | `lib/core/ai/services/chat_service.dart` | 003 closure | Streaming, cancellation, typed error state, `dispose` |
 | `lib/features/home/presentation/pages/home_page.dart` | 003, 004 | Streaming UI, stop control, typed-error action; now hosts `VoiceController`, Talk/Stop toggle, lifecycle mic release |
-| `lib/features/settings/presentation/pages/settings_page.dart` | 003 closure | Disposes the provider it creates |
+| `lib/features/settings/presentation/pages/settings_page.dart` | 003, 005 | Disposes the provider it creates; real persisted Wake Word and Speak Replies switches |
+| `lib/core/voice/config/voice_config.dart` | 005 | Added wake phrases, wake timings, and the opt-in default |
+| `lib/core/voice/services/speech_service.dart` | 005 | Added vendor-neutral `SpeechListenMode` |
+| `lib/core/voice/services/device_speech_service.dart` | 005 | Maps listen mode to the command/dictation engines |
+| `lib/core/voice/services/voice_controller.dart` | 005 | Added the `VoiceMode` wake-watch state machine, suspend/resume, and preference restore |
+| `lib/core/services/secure_storage_service.dart` | 005 | Persists the Wake Word and Speak Replies preferences |
 | `android/app/src/main/AndroidManifest.xml` | 004 | Added `RECORD_AUDIO` and speech/TTS `<queries>` visibility |
 | `test/widget_test.dart` | 002, 003 | Covers chat input, settings navigation, AI settings section |
 
@@ -184,16 +224,18 @@ degrades the app to text-only mode rather than failing.
 | Task 002 | 0 issues | 1/1 passed |
 | Task 003 (original) | 0 issues | 26/26 passed |
 | Task 003 (closure) | 0 issues | 42/42 passed |
-| Task 004 | **0 issues** | **61/61 passed** |
+| Task 004 | 0 issues | 61/61 passed |
+| Task 005 | **0 issues** | **81/81 passed** |
 
-Task 004 suite breakdown (7 suites total):
+Task 005 suite breakdown (8 suites total):
 
 - `ai_models_test.dart`: 7
 - `chat_service_test.dart`: 12
 - `groq_provider_test.dart`: 17
 - `secure_storage_service_test.dart`: 5
-- `voice_controller_test.dart`: 12
+- `voice_controller_test.dart`: 22
 - `voice_text_cleaner_test.dart`: 7
+- `wake_word_matcher_test.dart`: 10
 - `widget_test.dart`: 1
 
 ## Security Review Result
@@ -213,8 +255,12 @@ Task 004 suite breakdown (7 suites total):
   conversation history is lost if the home page state is rebuilt. Should be hoisted to an
   app-scoped instance when background features arrive.
 - **Session memory:** conversation is in-memory only; no persistence across restarts.
-- **Voice settings UI:** `handsFree` and `speakReplies` are configurable on
-  `VoiceController` but not yet exposed as Settings switches.
+- **Wake-word accuracy:** matching is text-based on the recogniser's transcript, so it only
+  fires once the engine returns the phrase. It trades some latency and battery for needing no
+  third-party account, and can mis-hear close phrases.
+- **No background wake word:** listening stops when the app leaves the foreground; Task 012
+  covers a foreground service and persistent notification.
+- **`handsFree` is not exposed in Settings** — it is configurable on `VoiceController` only.
 - **Application ID & Signing:** still `com.example.kitten` with debug signing.
 
 ## Decisions
@@ -233,10 +279,13 @@ Task 004 suite breakdown (7 suites total):
   "no speech" treated as normal and only blocking problems ending the session.
 - **Spoken output:** replies are read aloud automatically, with stage directions and emoji
   stripped first so Kitten sounds natural.
+- **Wake word:** always-on speech-to-text rather than a bundled wake-word engine — no
+  third-party account, at the cost of some battery. Off by default, foreground only, and the
+  phrase's remainder is treated as the question when present.
 
 ## Next Task
 
-**Task 005 — "Hey Kitten" activation (always-on speech-to-text).**
+**Task 006 — Kitten animation / personality system.**
 
 ## Task History
 
@@ -284,3 +333,19 @@ Task 004 suite breakdown (7 suites total):
 - **On-device:** verified on Pixel_7 (Android 17 / API 37) — build, install, plugin
   registration, permission grant, recognizer start, and automatic no-speech retry
 - **Result:** PASS (real spoken input/output pending a physical device)
+
+### Task 005
+- **Status:** COMPLETED · **Date:** 2026-09-20
+- **Summary:** Implemented "Hey Kitten" activation. Added a pure wake-phrase matcher with
+  remainder extraction, a `VoiceMode` state machine in `VoiceController` coordinating the
+  wake watch with the conversation loop, a vendor-neutral listen mode so wake spotting uses
+  the command-tuned engine, opt-in persisted Wake Word and Speak Replies switches in
+  Settings, and foreground-only suspend/resume of the microphone.
+- **Files created:** `wake_word_matcher.dart` plus its test file
+- **Files modified:** `voice_config.dart`, `speech_service.dart`, `device_speech_service.dart`,
+  `voice_controller.dart`, `secure_storage_service.dart`, `settings_page.dart`, `home_page.dart`
+- **Dependencies added:** none (reuses the Task 004 speech plugin)
+- **Testing:** `flutter analyze` — 0 issues; `flutter test` — 81/81 passed
+- **On-device:** verified on Pixel_7 (Android 17 / API 37) — off by default, switch enables
+  recognition, preference survives restart, switch disables it again
+- **Result:** PASS (spoken wake phrase pending a physical device)

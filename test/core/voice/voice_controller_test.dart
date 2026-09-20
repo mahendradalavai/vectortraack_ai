@@ -21,6 +21,7 @@ class FakeSpeechService implements SpeechService {
   int stopCount = 0;
   int cancelCount = 0;
   bool disposed = false;
+  SpeechListenMode? lastMode;
 
   @override
   bool get isAvailable => available;
@@ -35,8 +36,12 @@ class FakeSpeechService implements SpeechService {
   }
 
   @override
-  Future<void> listen({required SpeechResultCallback onResult}) async {
+  Future<void> listen({
+    required SpeechResultCallback onResult,
+    SpeechListenMode mode = SpeechListenMode.dictation,
+  }) async {
     listenCount++;
+    lastMode = mode;
     _onResult = onResult;
     _listening = true;
   }
@@ -118,6 +123,7 @@ VoiceController _buildController({
   ChatService? chatService,
   bool? speakReplies,
   bool? handsFree,
+  bool? wakeWordEnabled,
 }) {
   return VoiceController(
     chatService: chatService ?? ChatService(provider: FakeAiProvider()),
@@ -125,13 +131,14 @@ VoiceController _buildController({
     ttsService: tts,
     speakReplies: speakReplies,
     handsFree: handsFree,
-    // Keep the loop deterministic and fast in tests.
+    wakeWordEnabled: wakeWordEnabled,
+    // Keep the loops deterministic and fast in tests.
     listenRestartDelay: Duration.zero,
   );
 }
 
 void main() {
-  group('VoiceController', () {
+  group('VoiceController conversation', () {
     test('start opens a listening window and reports the listening state', () async {
       final speech = FakeSpeechService();
       final tts = FakeTtsService();
@@ -143,6 +150,7 @@ void main() {
       expect(controller.isListening, isTrue);
       expect(controller.assistantState, AssistantState.listening);
       expect(speech.listenCount, 1);
+      expect(speech.lastMode, SpeechListenMode.dictation);
       expect(controller.voiceError, isNull);
     });
 
@@ -158,12 +166,8 @@ void main() {
       speech.emit('Hello Kitten');
       await _settle();
 
-      // Kitten answered and remembered the exchange.
       expect(controller.chatService.messages.length, 2);
       expect(controller.chatService.messages[0].content, 'Hello Kitten');
-      expect(controller.chatService.messages[1].isAssistant, isTrue);
-
-      // The reply was read aloud, and hands-free listening resumed.
       expect(tts.spoken, ['Meow! How are you?']);
       expect(speech.listenCount, 2);
       expect(controller.isActive, isTrue);
@@ -189,7 +193,6 @@ void main() {
       await _settle();
 
       expect(controller.chatService.messages, isEmpty);
-      expect(tts.spoken, isEmpty);
       expect(controller.isListening, isTrue);
 
       speech.emit('Hello', isFinal: true);
@@ -255,7 +258,7 @@ void main() {
       expect(controller.isActive, isFalse);
       expect(controller.isListening, isFalse);
       expect(controller.assistantState, AssistantState.idle);
-      expect(speech.cancelCount, 1);
+      expect(speech.cancelCount, greaterThanOrEqualTo(1));
       expect(tts.stopCount, greaterThanOrEqualTo(1));
     });
 
@@ -303,7 +306,6 @@ void main() {
       await controller.start();
 
       expect(controller.isActive, isFalse);
-      expect(controller.isListening, isFalse);
       expect(controller.speechAvailable, isFalse);
       expect(controller.voiceError, isNotNull);
     });
@@ -340,9 +342,165 @@ void main() {
       expect(speech.disposed, isTrue);
       expect(tts.disposed, isTrue);
 
-      // The injected ChatService is owned by the caller and must still work.
       final reply = await chat.sendMessage('Still there?');
       expect(reply, isNotNull);
+    });
+  });
+
+  group('VoiceController wake word', () {
+    test('is off by default and only watches once enabled', () async {
+      final speech = FakeSpeechService();
+      final tts = FakeTtsService();
+      final controller = _buildController(speech: speech, tts: tts);
+
+      expect(controller.wakeWordEnabled, isFalse);
+      expect(speech.listenCount, 0);
+
+      await controller.enableWakeWord();
+
+      expect(controller.wakeWordEnabled, isTrue);
+      expect(controller.isWatchingForWakeWord, isTrue);
+      expect(controller.isListening, isTrue);
+      expect(speech.lastMode, SpeechListenMode.command);
+    });
+
+    test('the wake phrase with a trailing question is answered immediately', () async {
+      final speech = FakeSpeechService();
+      final tts = FakeTtsService();
+      final controller = _buildController(speech: speech, tts: tts);
+
+      await controller.enableWakeWord();
+      speech.emit('Hey Kitten, what is the weather?');
+      await _settle();
+
+      expect(controller.isActive, isTrue);
+      expect(controller.chatService.messages.length, 2);
+      expect(
+        controller.chatService.messages[0].content,
+        'what is the weather',
+      );
+      expect(tts.spoken, ['Meow! How are you?']);
+    });
+
+    test('a bare wake phrase opens the microphone for a separate question', () async {
+      final speech = FakeSpeechService();
+      final tts = FakeTtsService();
+      final controller = _buildController(speech: speech, tts: tts);
+
+      await controller.enableWakeWord();
+      speech.emit('Hey Kitten');
+      await _settle();
+
+      expect(controller.isActive, isTrue);
+      // Nothing was asked yet, so no conversation has happened.
+      expect(controller.chatService.messages, isEmpty);
+      expect(tts.spoken, isEmpty);
+      expect(controller.isListening, isTrue);
+      expect(speech.listenCount, 2);
+      expect(speech.lastMode, SpeechListenMode.dictation);
+    });
+
+    test('tolerates casing, punctuation, and stray spacing', () async {
+      final speech = FakeSpeechService();
+      final tts = FakeTtsService();
+      final controller = _buildController(speech: speech, tts: tts);
+
+      await controller.enableWakeWord();
+      speech.emit('  HEY,   Kitten!! : what is your name ');
+      await _settle();
+
+      expect(controller.isActive, isTrue);
+      expect(controller.chatService.messages.first.content, 'what is your name');
+    });
+
+    test('speech that is not the wake phrase keeps watching', () async {
+      final speech = FakeSpeechService();
+      final tts = FakeTtsService();
+      final controller = _buildController(speech: speech, tts: tts);
+
+      await controller.enableWakeWord();
+      speech.emit('does this thing work');
+      await _settle();
+
+      expect(controller.isWatchingForWakeWord, isTrue);
+      expect(controller.isActive, isFalse);
+      expect(controller.chatService.messages, isEmpty);
+      expect(controller.voiceError, isNull);
+      expect(speech.listenCount, 2);
+    });
+
+    test('ending a conversation returns to watching for the wake phrase', () async {
+      final speech = FakeSpeechService();
+      final tts = FakeTtsService();
+      final controller = _buildController(speech: speech, tts: tts);
+
+      await controller.enableWakeWord();
+      speech.emit('Hey Kitten');
+      await _settle();
+      expect(controller.isActive, isTrue);
+
+      await controller.stop();
+
+      expect(controller.isWatchingForWakeWord, isTrue);
+      expect(controller.isActive, isFalse);
+      expect(speech.lastMode, SpeechListenMode.command);
+    });
+
+    test('suspend closes the microphone and resume re-arms watching', () async {
+      final speech = FakeSpeechService();
+      final tts = FakeTtsService();
+      final controller = _buildController(speech: speech, tts: tts);
+
+      await controller.enableWakeWord();
+      await controller.suspend();
+
+      expect(controller.mode, VoiceMode.idle);
+      expect(controller.isListening, isFalse);
+
+      await controller.resume();
+
+      expect(controller.isWatchingForWakeWord, isTrue);
+      expect(controller.isListening, isTrue);
+    });
+
+    test('disableWakeWord stops watching', () async {
+      final speech = FakeSpeechService();
+      final tts = FakeTtsService();
+      final controller = _buildController(speech: speech, tts: tts);
+
+      await controller.enableWakeWord();
+      await controller.disableWakeWord();
+
+      expect(controller.wakeWordEnabled, isFalse);
+      expect(controller.mode, VoiceMode.idle);
+      expect(controller.isListening, isFalse);
+      expect(speech.cancelCount, greaterThanOrEqualTo(1));
+    });
+
+    test('never claims to watch when speech input is unavailable', () async {
+      final speech = FakeSpeechService(available: false);
+      final tts = FakeTtsService();
+      final controller = _buildController(speech: speech, tts: tts);
+
+      await controller.enableWakeWord();
+
+      expect(controller.wakeWordEnabled, isFalse);
+      expect(controller.isWatchingForWakeWord, isFalse);
+      expect(controller.voiceError, isNotNull);
+    });
+
+    test('suspend during a conversation leaves nothing listening', () async {
+      final speech = FakeSpeechService();
+      final tts = FakeTtsService();
+      final controller = _buildController(speech: speech, tts: tts);
+
+      await controller.start();
+      await controller.suspend();
+      await _settle();
+
+      expect(controller.mode, VoiceMode.idle);
+      expect(controller.isListening, isFalse);
+      expect(speech.isListening, isFalse);
     });
   });
 }

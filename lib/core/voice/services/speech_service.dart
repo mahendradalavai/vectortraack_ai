@@ -22,6 +22,18 @@ enum SpeechIssue {
 /// Reports a listening-window problem that ended it without a result.
 typedef SpeechIssueCallback = void Function(SpeechIssue issue, String message);
 
+/// How the recogniser should be tuned for a listening window.
+///
+/// Vendor-neutral on purpose: the platform plugin's own enum stays inside the
+/// device implementation.
+enum SpeechListenMode {
+  /// Short phrases and commands — used while watching for the wake phrase.
+  command,
+
+  /// Longer sentences — used for conversational questions.
+  dictation,
+}
+
 /// Contract for speech-to-text input.
 ///
 /// Exists so the conversation loop can be driven and unit-tested without a
@@ -42,7 +54,10 @@ abstract class SpeechService {
 
   /// Opens one listening window. [onResult] is called with partial and final
   /// transcripts until the window closes on silence or timeout.
-  Future<void> listen({required SpeechResultCallback onResult});
+  Future<void> listen({
+    required SpeechResultCallback onResult,
+    SpeechListenMode mode = SpeechListenMode.dictation,
+  });
 
   /// Closes the listening window, allowing a final result to be delivered.
   Future<void> stop();

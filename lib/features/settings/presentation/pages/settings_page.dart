@@ -4,6 +4,8 @@ import 'package:kitten/core/ai/config/ai_config.dart';
 import 'package:kitten/core/ai/models/ai_exception.dart';
 import 'package:kitten/core/ai/providers/groq_provider.dart';
 import 'package:kitten/core/services/secure_storage_service.dart';
+import 'package:kitten/core/voice/config/voice_config.dart';
+import 'package:kitten/core/voice/services/voice_controller.dart';
 
 /// Settings screen for Kitten AI.
 ///
@@ -14,10 +16,15 @@ class SettingsPage extends StatefulWidget {
     super.key,
     this.secureStorage,
     this.groqProvider,
+    this.voiceController,
   });
 
   final SecureStorageService? secureStorage;
   final GroqProvider? groqProvider;
+
+  /// The live voice session, when one exists, so voice switches take effect
+  /// immediately instead of only after a restart.
+  final VoiceController? voiceController;
 
   @override
   State<SettingsPage> createState() => _SettingsPageState();
@@ -35,6 +42,9 @@ class _SettingsPageState extends State<SettingsPage> {
   bool _isTestingConnection = false;
   String? _connectionStatusMessage;
   bool? _connectionSuccess;
+
+  bool _wakeWordEnabled = VoiceConfig.wakeWordByDefault;
+  bool _speakReplies = VoiceConfig.speakRepliesByDefault;
 
   @override
   void initState() {
@@ -57,6 +67,8 @@ class _SettingsPageState extends State<SettingsPage> {
   Future<void> _loadSettings() async {
     final key = await _storage.getGroqApiKey();
     final model = await _storage.getSelectedModel();
+    final wakeWord = await _storage.getWakeWordEnabled();
+    final speakReplies = await _storage.getSpeakReplies();
 
     if (mounted) {
       setState(() {
@@ -67,9 +79,42 @@ class _SettingsPageState extends State<SettingsPage> {
                 AiConfig.availableModels.contains(model))
             ? model
             : AiConfig.defaultModel;
+        _wakeWordEnabled = wakeWord ?? VoiceConfig.wakeWordByDefault;
+        _speakReplies = speakReplies ?? VoiceConfig.speakRepliesByDefault;
         _isLoading = false;
       });
     }
+  }
+
+  Future<void> _changeWakeWord(bool enabled) async {
+    setState(() {
+      _wakeWordEnabled = enabled;
+    });
+    await _storage.saveWakeWordEnabled(enabled);
+
+    if (enabled) {
+      await widget.voiceController?.enableWakeWord();
+    } else {
+      await widget.voiceController?.disableWakeWord();
+    }
+
+    // The controller refuses to watch when speech is unavailable, so mirror its
+    // real state back into the switch rather than lying to the user.
+    final actual = widget.voiceController?.wakeWordEnabled ?? enabled;
+    if (mounted && actual != enabled) {
+      setState(() {
+        _wakeWordEnabled = actual;
+      });
+      await _storage.saveWakeWordEnabled(actual);
+    }
+  }
+
+  Future<void> _changeSpeakReplies(bool enabled) async {
+    setState(() {
+      _speakReplies = enabled;
+    });
+    await _storage.saveSpeakReplies(enabled);
+    widget.voiceController?.setSpeakReplies(enabled);
   }
 
   Future<void> _showApiKeyDialog() async {
@@ -416,15 +461,28 @@ class _SettingsPageState extends State<SettingsPage> {
                   colorScheme: cs,
                   textTheme: tt,
                 ),
-                _PlaceholderTile(
-                  icon: Icons.record_voice_over_outlined,
-                  title: 'Wake Word',
-                  subtitle: 'Not configured',
+                SwitchListTile(
+                  secondary: const Icon(Icons.record_voice_over_outlined),
+                  title: const Text('Wake Word'),
+                  subtitle: Text(
+                    _wakeWordEnabled
+                        ? 'Waiting for "${VoiceConfig.wakePhrases.first}" — '
+                            'listening while the app is open'
+                        : 'Off — enable to wake Kitten by voice',
+                  ),
+                  value: _wakeWordEnabled,
+                  onChanged: _changeWakeWord,
                 ),
-                _PlaceholderTile(
-                  icon: Icons.graphic_eq,
-                  title: 'Voice',
-                  subtitle: 'Default',
+                SwitchListTile(
+                  secondary: const Icon(Icons.graphic_eq),
+                  title: const Text('Speak Replies'),
+                  subtitle: Text(
+                    _speakReplies
+                        ? 'Kitten reads its answers aloud'
+                        : 'Kitten stays silent',
+                  ),
+                  value: _speakReplies,
+                  onChanged: _changeSpeakReplies,
                 ),
 
                 const Divider(height: 32),
