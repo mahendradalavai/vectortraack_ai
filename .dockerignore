@@ -1,0 +1,23 @@
+# Never ship local secrets or oversized development artifacts into the image
+.env
+.env.*
+!.env.example
+.venv/
+venv/
+.git/
+.freebuff/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Local runtime scratch — Supabase Storage is the permanent store
+uploads/
+results/
+output/
+videos/
+images/
+
+# Datasets and training artifacts stay out of the runtime image
+dataset/
+runs/
+*.log

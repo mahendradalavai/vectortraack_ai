@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VectorTrack AI - UAV Detection Dashboard</title>
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Orbitron:wght@400;700;900&display=swap" rel="stylesheet">
+    <!-- FontAwesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Custom Style -->
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="glow-bg"></div>
+    <div class="grid-overlay"></div>
+
+    <div class="dashboard-container">
+        <!-- HEADER -->
+        <header class="header">
+            <div class="logo-area">
+                <i class="fa-solid fa-crosshairs logo-icon"></i>
+                <div class="title-sub">
+                    <h1>VECTORTRACK AI</h1>
+                    <span class="subtitle">UAV Detections &amp; Spatial Analytics</span>
+                </div>
+            </div>
+            
+            <div class="system-status-panel">
+                <div class="status-indicator">
+                    <span class="status-dot pulsing" id="status-dot"></span>
+                    <span class="status-text" id="status-text">INITIALIZING...</span>
+                </div>
+                <div class="status-details">
+                    <span class="stat-badge" id="model-badge">YOLOv8: Loading</span>
+                    <span class="stat-badge" id="ping-badge">Latency: -- ms</span>
+                </div>
+            </div>
+
+            <!-- SUPABASE AUTH -->
+            <div class="auth-panel" id="auth-panel">
+                <div class="auth-user hidden" id="auth-user">
+                    <i class="fa-solid fa-user-astronaut"></i>
+                    <span class="user-chip font-mono" id="user-email">--</span>
+                </div>
+                <button class="btn btn-ghost hidden" id="btn-logout">
+                    <i class="fa-solid fa-right-from-bracket"></i> LOGOUT
+                </button>
+                <button class="btn btn-primary" id="btn-google-login">
+                    <i class="fa-brands fa-google"></i> SIGN IN WITH GOOGLE
+                </button>
+            </div>
+        </header>
+
+        <!-- MAIN LAYOUT -->
+        <main class="main-content">
+            <!-- LEFT PANEL: Upload & Controls -->
+            <section class="left-panel">
+                <!-- TELEMETRY CONTROL -->
+                <div class="card glass">
+                    <div class="card-header">
+                        <i class="fa-solid fa-satellite-dish card-icon text-neon-blue"></i>
+                        <h2>Telemetry Control</h2>
+                        <!-- Media type badge -->
+                        <span class="media-mode-badge" id="media-mode-badge">
+                            <i class="fa-solid fa-image"></i> IMAGE
+                        </span>
+                    </div>
+                    <div class="card-body">
+                        <p class="description">Upload UAV aerial imagery or drone video footage to detect environmental hazards, debris, garbage, and rubbish.</p>
+
+                        <!-- Sign-in is optional: detections work either way. -->
+                        <div class="auth-gate hidden" id="auth-gate">
+                            <i class="fa-solid fa-user-astronaut"></i>
+                            <p>Signed out: scans are stored in the shared app account. Sign in with Google to keep them in your own workspace instead.</p>
+                        </div>
+                        
+                        <!-- MEDIA TYPE TABS -->
+                        <div class="media-tabs">
+                            <button class="media-tab active" id="tab-image" onclick="switchTab('image')">
+                                <i class="fa-solid fa-image"></i> Image
+                            </button>
+                            <button class="media-tab" id="tab-video" onclick="switchTab('video')">
+                                <i class="fa-solid fa-film"></i> Video
+                            </button>
+                        </div>
+
+                        <!-- DRAG & DROP ZONE -->
+                        <div class="upload-zone" id="upload-zone">
+                            <input type="file" id="file-input" accept="image/*" class="file-input">
+                            <div class="upload-prompt">
+                                <i class="fa-solid fa-cloud-arrow-up upload-icon" id="upload-icon"></i>
+                                <h3 id="upload-prompt-title">Drag &amp; Drop Image Here</h3>
+                                <p>or <span>browse files</span></p>
+                                <span class="file-types" id="file-types-hint">Supports JPG, PNG, WEBP up to 10MB</span>
+                            </div>
+                        </div>
+
+                        <!-- SYSTEM CONTROLS -->
+                        <div class="controls-group">
+                            <div class="input-field">
+                                <label for="source-input"><i class="fa-solid fa-video"></i> Data Source Tag</label>
+                                <select id="source-input">
+                                    <option value="drone-cam-01">Drone Cam #01 (Thermal)</option>
+                                    <option value="drone-cam-02" selected>Drone Cam #02 (RGB)</option>
+                                    <option value="satellite-ortho">Satellite Orthomosaic</option>
+                                    <option value="manual-upload">Manual Upload Log</option>
+                                </select>
+                            </div>
+                            <button class="btn btn-primary" id="btn-process" disabled>
+                                <i class="fa-solid fa-bolt"></i> RUN DETECTIONS
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ANALYTICS PANEL -->
+                <div class="card glass">
+                    <div class="card-header">
+                        <i class="fa-solid fa-chart-simple card-icon text-neon-green"></i>
+                        <h2>Detection Summary</h2>
+                    </div>
+                    <div class="card-body">
+                        <div class="no-detections-state" id="no-detections-msg">
+                            <i class="fa-solid fa-circle-info"></i>
+                            <p>No detection logs loaded. Run analysis above to populate metrics.</p>
+                        </div>
+                        <div class="metrics-grid hidden" id="metrics-grid">
+                            <div class="metric-card">
+                                <span class="metric-label">Garbage Count</span>
+                                <span class="metric-value text-neon-blue" id="val-garbage">0</span>
+                            </div>
+                            <div class="metric-card">
+                                <span class="metric-label">Rubbish Count</span>
+                                <span class="metric-value text-neon-green" id="val-rubbish">0</span>
+                            </div>
+                            <div class="metric-card">
+                                <span class="metric-label">Max Confidence</span>
+                                <span class="metric-value text-neon-yellow" id="val-conf">0%</span>
+                            </div>
+                            <div class="metric-card">
+                                <span class="metric-label">Inference Time</span>
+                                <span class="metric-value" id="val-time">--</span>
+                            </div>
+                            <!-- Video-only metrics (hidden for images) -->
+                            <div class="metric-card hidden" id="metric-frames">
+                                <span class="metric-label">Frames Scanned</span>
+                                <span class="metric-value text-neon-blue" id="val-frames">0</span>
+                            </div>
+                            <div class="metric-card hidden" id="metric-total-det">
+                                <span class="metric-label">Total Detections</span>
+                                <span class="metric-value text-neon-yellow" id="val-total-det">0</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- RIGHT PANEL: Visualizer -->
+            <section class="right-panel">
+                <div class="card glass visualizer-card">
+                    <div class="card-header flex-between">
+                        <div class="flex-align">
+                            <i class="fa-solid fa-desktop card-icon text-neon-yellow"></i>
+                            <h2>UAV Spatial Visualizer</h2>
+                        </div>
+                        <div class="view-toggles hidden" id="view-toggles">
+                            <button class="toggle-btn active" id="btn-view-annotated">Annotated</button>
+                            <button class="toggle-btn" id="btn-view-original">Original</button>
+                        </div>
+                    </div>
+                    <div class="card-body visualizer-body">
+                        <!-- Empty/placeholder state -->
+                        <div class="empty-visualizer" id="visualizer-empty">
+                            <div class="crosshair-wrapper">
+                                <div class="hud-circle-outer"></div>
+                                <div class="hud-circle-inner"></div>
+                                <i class="fa-solid fa-crosshairs visualizer-placeholder-icon"></i>
+                            </div>
+                            <p class="placeholder-text">WAITING FOR AERIAL TELEMETRY INPUT...</p>
+                            <span class="hint-text">Upload an image or video in the control panel to initiate HUD mapping overlay.</span>
+                        </div>
+
+                        <!-- IMAGE display -->
+                        <div class="visualizer-display hidden" id="visualizer-display">
+                            <div class="image-wrapper">
+                                <img src="" alt="UAV Aerial View" id="main-display-img">
+                                <canvas id="detection-canvas"></canvas>
+                                <div class="hud-overlay">
+                                    <div class="hud-bracket top-left"></div>
+                                    <div class="hud-bracket top-right"></div>
+                                    <div class="hud-bracket bottom-left"></div>
+                                    <div class="hud-bracket bottom-right"></div>
+                                    <div class="hud-info-tag font-mono" id="hud-timestamp">GPS LOCK: N/A</div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- VIDEO display -->
+                        <div class="visualizer-display hidden" id="visualizer-video-display">
+                            <div class="video-wrapper">
+                                <video id="main-display-video" controls playsinline>
+                                    Your browser does not support the video tag.
+                                </video>
+                                <div class="hud-overlay">
+                                    <div class="hud-bracket top-left"></div>
+                                    <div class="hud-bracket top-right"></div>
+                                    <div class="hud-bracket bottom-left"></div>
+                                    <div class="hud-bracket bottom-right"></div>
+                                    <div class="hud-info-tag font-mono" id="hud-timestamp-video">GPS LOCK: N/A</div>
+                                </div>
+                                <!-- Video stats overlay -->
+                                <div class="video-stats-overlay" id="video-stats-overlay">
+                                    <span id="vstat-frames">-- frames</span>
+                                    <span id="vstat-detections">-- detections</span>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <!-- Loader overlay -->
+                        <div class="loader-overlay hidden" id="loader-overlay">
+                            <div class="radar-scanner"></div>
+                            <span class="loading-label" id="loading-label">RUNNING YOLOv8 SPATIAL INFERENCE...</span>
+                            <span class="loading-sublabel" id="loading-sublabel"></span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- LIVE LOG VIEW -->
+                <div class="card glass logs-card">
+                    <div class="card-header">
+                        <i class="fa-solid fa-terminal card-icon text-neon-blue"></i>
+                        <h2>Detection Logs (Supabase Realtime)</h2>
+                    </div>
+                    <div class="card-body logs-body">
+                        <ul class="logs-list font-mono" id="logs-list">
+                            <li class="system-log">[SYSTEM] Ready. Waiting for local connection or media input...</li>
+                        </ul>
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
+    <!-- Supabase JS from a pinned CDN build, resolved through the import map below -->
+    <script type="importmap">
+    {
+        "imports": {
+            "@supabase/supabase-js": "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm"
+        }
+    }
+    </script>
+    <script type="module" src="/static/app.js"></script>
+</body>
+</html>

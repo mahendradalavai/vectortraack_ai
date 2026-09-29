@@ -1,0 +1,38 @@
+# Python cache
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Virtual environment
+.venv/
+venv/
+
+# Logs and runs
+runs/
+output/
+*.log
+
+# Model artifacts
+models/*.pt
+models/*.onnx
+*.pt
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Sensitive credentials — never commit real keys
+.env
+.env.*
+!.env.example
+
+# Local runtime scratch (Supabase Storage is the permanent store)
+uploads/
+results/
+.freebuff/
+
+
+# Large data directories
+dataset/
+videos/
+images/
