@@ -29,6 +29,12 @@ class AiConfig {
   /// far below that, so this is a sanity guard rather than a real limit.
   static const int maxImageBytes = 4 * 1024 * 1024;
 
+  /// How many request/execute rounds a single tool turn may take.
+  ///
+  /// Each round is one model request plus the tools it asked for. Bounded so a
+  /// model stuck in a loop cannot spin forever on the user's battery and bill.
+  static const int maxToolRounds = 3;
+
   /// Groq Chat Completions API endpoint (OpenAI-compatible).
   static const String groqApiEndpoint =
       'https://api.groq.com/openai/v1/chat/completions';

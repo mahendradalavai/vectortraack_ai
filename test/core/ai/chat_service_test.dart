@@ -35,10 +35,7 @@ class FakeAiProvider implements AiProvider {
     if (shouldThrow != null) {
       throw shouldThrow!;
     }
-    return ChatResponse(
-      content: responseToReturn,
-      model: 'fake-model',
-    );
+    return ChatResponse(content: responseToReturn, model: 'fake-model');
   }
 
   @override
@@ -147,24 +144,26 @@ void main() {
 
     // ── Screen understanding ────────────────────────────────────
 
-    test('sendMessageWithImage attaches the image and asks the vision model',
-        () async {
-      final fakeProvider = FakeAiProvider(streamChunks: ['A ', 'cat']);
-      final service = ChatService(provider: fakeProvider);
+    test(
+      'sendMessageWithImage attaches the image and asks the vision model',
+      () async {
+        final fakeProvider = FakeAiProvider(streamChunks: ['A ', 'cat']);
+        final service = ChatService(provider: fakeProvider);
 
-      final reply = await service.sendMessageWithImage(
-        'What is on my screen?',
-        'QUJD',
-      );
+        final reply = await service.sendMessageWithImage(
+          'What is on my screen?',
+          'QUJD',
+        );
 
-      expect(reply?.content, 'A cat');
-      // The everyday text model cannot read images, so the turn is rerouted.
-      expect(fakeProvider.lastRequest!.model, AiConfig.visionModel);
+        expect(reply?.content, 'A cat');
+        // The everyday text model cannot read images, so the turn is rerouted.
+        expect(fakeProvider.lastRequest!.model, AiConfig.visionModel);
 
-      final userMessage = service.messages.first;
-      expect(userMessage.hasImage, isTrue);
-      expect(userMessage.content, 'What is on my screen?');
-    });
+        final userMessage = service.messages.first;
+        expect(userMessage.hasImage, isTrue);
+        expect(userMessage.content, 'What is on my screen?');
+      },
+    );
 
     test('replaying history resends only the newest screenshot', () async {
       final fakeProvider = FakeAiProvider();
@@ -179,72 +178,79 @@ void main() {
       expect(withImages.length, 1);
       expect(withImages.single.imageDataBase64, 'BBBB');
       // The older turn keeps its text, so the conversation still makes sense.
-      expect(
-        sent.any((m) => m.content == 'first look' && !m.hasImage),
-        isTrue,
-      );
+      expect(sent.any((m) => m.content == 'first look' && !m.hasImage), isTrue);
 
       // Trimming applies to the request only; the visible chat keeps both.
       expect(service.messages.where((m) => m.hasImage).length, 2);
     });
 
-    test('a screenshot turn reports a vision failure through lastError',
-        () async {
-      final fakeProvider = FakeAiProvider(
-        shouldThrow: AiException.badResponse('vision model rejected the image'),
-      );
-      final service = ChatService(provider: fakeProvider);
+    test(
+      'a screenshot turn reports a vision failure through lastError',
+      () async {
+        final fakeProvider = FakeAiProvider(
+          shouldThrow: AiException.badResponse(
+            'vision model rejected the image',
+          ),
+        );
+        final service = ChatService(provider: fakeProvider);
 
-      final reply = await service.sendMessageWithImage('look', 'QUJD');
+        final reply = await service.sendMessageWithImage('look', 'QUJD');
 
-      expect(reply, isNull);
-      expect(service.lastError, isNotNull);
-      expect(service.assistantState, AssistantState.idle);
-    });
+        expect(reply, isNull);
+        expect(service.lastError, isNotNull);
+        expect(service.assistantState, AssistantState.idle);
+      },
+    );
 
-    test('extra context is appended to the system prompt after the mood', () async {
-      final fakeProvider = FakeAiProvider();
-      final service = ChatService(
-        provider: fakeProvider,
-        contextProvider: () => 'CURRENT CONTEXT: the user was in Chrome.',
-      );
+    test(
+      'extra context is appended to the system prompt after the mood',
+      () async {
+        final fakeProvider = FakeAiProvider();
+        final service = ChatService(
+          provider: fakeProvider,
+          contextProvider: () => 'CURRENT CONTEXT: the user was in Chrome.',
+        );
 
-      await service.sendMessage('hi');
+        await service.sendMessage('hi');
 
-      final systemPrompt = fakeProvider.lastRequest!.messages.first.content;
-      expect(systemPrompt, contains(KittenSystemPrompt.prompt));
-      expect(
-        systemPrompt,
-        contains('CURRENT CONTEXT: the user was in Chrome.'),
-      );
-      // Context is added under the persona and mood, never instead of them.
-      expect(
-        systemPrompt.indexOf('CURRENT MOOD:'),
-        lessThan(systemPrompt.indexOf('CURRENT CONTEXT:')),
-      );
-    });
+        final systemPrompt = fakeProvider.lastRequest!.messages.first.content;
+        expect(systemPrompt, contains(KittenSystemPrompt.prompt));
+        expect(
+          systemPrompt,
+          contains('CURRENT CONTEXT: the user was in Chrome.'),
+        );
+        // Context is added under the persona and mood, never instead of them.
+        expect(
+          systemPrompt.indexOf('CURRENT MOOD:'),
+          lessThan(systemPrompt.indexOf('CURRENT CONTEXT:')),
+        );
+      },
+    );
 
-    test('the context provider is asked every turn and may stay silent', () async {
-      String? context;
-      final fakeProvider = FakeAiProvider();
-      final service = ChatService(
-        provider: fakeProvider,
-        contextProvider: () => context,
-      );
+    test(
+      'the context provider is asked every turn and may stay silent',
+      () async {
+        String? context;
+        final fakeProvider = FakeAiProvider();
+        final service = ChatService(
+          provider: fakeProvider,
+          contextProvider: () => context,
+        );
 
-      await service.sendMessage('hi');
-      expect(
-        fakeProvider.lastRequest!.messages.first.content,
-        isNot(contains('CURRENT CONTEXT')),
-      );
+        await service.sendMessage('hi');
+        expect(
+          fakeProvider.lastRequest!.messages.first.content,
+          isNot(contains('CURRENT CONTEXT')),
+        );
 
-      context = 'CURRENT CONTEXT: the user was in Chrome.';
-      await service.sendMessage('still there?');
-      expect(
-        fakeProvider.lastRequest!.messages.first.content,
-        contains('CURRENT CONTEXT'),
-      );
-    });
+        context = 'CURRENT CONTEXT: the user was in Chrome.';
+        await service.sendMessage('still there?');
+        expect(
+          fakeProvider.lastRequest!.messages.first.content,
+          contains('CURRENT CONTEXT'),
+        );
+      },
+    );
 
     test('sendMessage sets safe error message and returns state to idle on failure', () async {
       final fakeProvider = FakeAiProvider(
@@ -276,89 +282,101 @@ void main() {
 
     // ── Streaming ───────────────────────────────────────────────
 
-    test('sendMessageStreaming accumulates deltas into one assistant message', () async {
-      final fakeProvider = FakeAiProvider(
-        streamChunks: ['Meow', '! I am ', 'Kitten'],
-      );
-      final service = ChatService(provider: fakeProvider);
+    test(
+      'sendMessageStreaming accumulates deltas into one assistant message',
+      () async {
+        final fakeProvider = FakeAiProvider(
+          streamChunks: ['Meow', '! I am ', 'Kitten'],
+        );
+        final service = ChatService(provider: fakeProvider);
 
-      final states = <AssistantState>[];
-      service.addListener(() => states.add(service.assistantState));
+        final states = <AssistantState>[];
+        service.addListener(() => states.add(service.assistantState));
 
-      final result = await service.sendMessageStreaming('Hi');
+        final result = await service.sendMessageStreaming('Hi');
 
-      expect(result, isNotNull);
-      expect(result!.content, 'Meow! I am Kitten');
-      expect(service.messages.length, 2);
-      expect(service.messages[1].content, 'Meow! I am Kitten');
-      expect(service.assistantState, AssistantState.idle);
-      expect(service.isStreaming, isFalse);
-      expect(service.streamingMessage, isNull);
-      expect(states, contains(AssistantState.thinking));
-    });
+        expect(result, isNotNull);
+        expect(result!.content, 'Meow! I am Kitten');
+        expect(service.messages.length, 2);
+        expect(service.messages[1].content, 'Meow! I am Kitten');
+        expect(service.assistantState, AssistantState.idle);
+        expect(service.isStreaming, isFalse);
+        expect(service.streamingMessage, isNull);
+        expect(states, contains(AssistantState.thinking));
+      },
+    );
 
-    test('sendMessageStreaming exposes a live partial message while streaming', () async {
-      final fakeProvider = FakeAiProvider(streamChunks: ['Hel', 'lo']);
-      final service = ChatService(provider: fakeProvider);
+    test(
+      'sendMessageStreaming exposes a live partial message while streaming',
+      () async {
+        final fakeProvider = FakeAiProvider(streamChunks: ['Hel', 'lo']);
+        final service = ChatService(provider: fakeProvider);
 
-      // Mirrors the UI, which only renders non-empty partials.
-      final partials = <String>[];
-      service.addListener(() {
-        final partial = service.streamingMessage;
-        if (partial != null && partial.content.isNotEmpty) {
-          partials.add(partial.content);
-        }
-      });
+        // Mirrors the UI, which only renders non-empty partials.
+        final partials = <String>[];
+        service.addListener(() {
+          final partial = service.streamingMessage;
+          if (partial != null && partial.content.isNotEmpty) {
+            partials.add(partial.content);
+          }
+        });
 
-      await service.sendMessageStreaming('Hi');
+        await service.sendMessageStreaming('Hi');
 
-      expect(partials, ['Hel', 'Hello']);
-    });
+        expect(partials, ['Hel', 'Hello']);
+      },
+    );
 
-    test('sendMessageStreaming records typed error on provider failure', () async {
-      final fakeProvider = FakeAiProvider(
-        shouldThrow: AiException.invalidApiKey(),
-      );
-      final service = ChatService(provider: fakeProvider);
+    test(
+      'sendMessageStreaming records typed error on provider failure',
+      () async {
+        final fakeProvider = FakeAiProvider(
+          shouldThrow: AiException.invalidApiKey(),
+        );
+        final service = ChatService(provider: fakeProvider);
 
-      final result = await service.sendMessageStreaming('Hi');
+        final result = await service.sendMessageStreaming('Hi');
 
-      expect(result, isNull);
-      expect(service.lastErrorType, AiErrorType.invalidApiKey);
-      expect(service.lastErrorRequiresSettings, isTrue);
-      expect(service.isStreaming, isFalse);
-      expect(service.streamingMessage, isNull);
-      expect(service.assistantState, AssistantState.idle);
-      // Only the user message remains.
-      expect(service.messages.length, 1);
-    });
+        expect(result, isNull);
+        expect(service.lastErrorType, AiErrorType.invalidApiKey);
+        expect(service.lastErrorRequiresSettings, isTrue);
+        expect(service.isStreaming, isFalse);
+        expect(service.streamingMessage, isNull);
+        expect(service.assistantState, AssistantState.idle);
+        // Only the user message remains.
+        expect(service.messages.length, 1);
+      },
+    );
 
-    test('cancelStreaming keeps already-received text and ends the turn', () async {
-      final provider = ControlledStreamProvider();
-      final service = ChatService(provider: provider);
+    test(
+      'cancelStreaming keeps already-received text and ends the turn',
+      () async {
+        final provider = ControlledStreamProvider();
+        final service = ChatService(provider: provider);
 
-      final future = service.sendMessageStreaming('Hi');
-      await _settle();
+        final future = service.sendMessageStreaming('Hi');
+        await _settle();
 
-      provider.controller.add('Partial');
-      await _settle();
-      expect(service.isStreaming, isTrue);
-      expect(service.streamingMessage?.content, 'Partial');
+        provider.controller.add('Partial');
+        await _settle();
+        expect(service.isStreaming, isTrue);
+        expect(service.streamingMessage?.content, 'Partial');
 
-      service.cancelStreaming();
-      provider.controller.add(' and more');
-      await _settle();
+        service.cancelStreaming();
+        provider.controller.add(' and more');
+        await _settle();
 
-      final result = await future;
+        final result = await future;
 
-      expect(result, isNotNull);
-      expect(result!.content, 'Partial');
-      expect(service.isStreaming, isFalse);
-      expect(service.messages.last.content, 'Partial');
-      expect(service.assistantState, AssistantState.idle);
+        expect(result, isNotNull);
+        expect(result!.content, 'Partial');
+        expect(service.isStreaming, isFalse);
+        expect(service.messages.last.content, 'Partial');
+        expect(service.assistantState, AssistantState.idle);
 
-      await provider.controller.close();
-    });
+        await provider.controller.close();
+      },
+    );
 
     test('dispose releases the underlying provider', () {
       final fakeProvider = FakeAiProvider();
@@ -410,6 +428,60 @@ void main() {
       expect(service.lastError, isNull);
       expect(service.lastErrorType, isNull);
       expect(service.lastErrorRequiresSettings, isFalse);
+    });
+  });
+
+  group('ChatService seeded openings', () {
+    test('a line Kitten said on its own becomes the first message', () async {
+      final provider = FakeAiProvider();
+      final service = ChatService(provider: provider);
+      var notifications = 0;
+      service.addListener(() => notifications++);
+
+      final seeded = service.seedAssistantMessage(
+        'Instagram? What are we doing here?',
+      );
+
+      expect(seeded, isTrue);
+      expect(notifications, 1);
+      expect(service.messages, hasLength(1));
+      expect(service.messages.single.isAssistant, isTrue);
+      expect(
+        service.messages.single.content,
+        'Instagram? What are we doing here?',
+      );
+      expect(provider.lastRequest, isNull, reason: 'seeding costs no request');
+
+      await service.sendMessage('Just browsing');
+
+      // Kitten's own line travels with the turn, so the reply knows what was
+      // already said. The first message in the payload is the system prompt.
+      expect(provider.lastRequest!.messages[1].content, contains('Instagram'));
+    });
+
+    test('repeats and blank lines are ignored', () {
+      final service = ChatService(provider: FakeAiProvider());
+
+      expect(service.seedAssistantMessage('Hello there!'), isTrue);
+      expect(service.seedAssistantMessage('Hello there!'), isFalse);
+      expect(service.seedAssistantMessage('   '), isFalse);
+      expect(service.messages, hasLength(1));
+    });
+
+    test('a seeded line is dropped mid-stream', () async {
+      final provider = ControlledStreamProvider();
+      final service = ChatService(provider: provider);
+
+      final pending = service.sendMessageStreaming('Hi');
+      await Future<void>.delayed(Duration.zero);
+
+      expect(service.seedAssistantMessage('Instagram? What now?'), isFalse);
+
+      provider.controller.add('Sure');
+      await provider.controller.close();
+      await pending;
+
+      expect(service.messages.map((m) => m.content), ['Hi', 'Sure']);
     });
   });
 }

@@ -9,28 +9,31 @@ import 'package:kitten/core/ai/prompts/kitten_system_prompt.dart';
 
 void main() {
   group('AI Models & Prompts', () {
-    test('ChatMessage creates user, assistant, and system messages correctly', () {
-      final userMsg = ChatMessage.user('Hello');
-      expect(userMsg.role, ChatRole.user);
-      expect(userMsg.isUser, isTrue);
-      expect(userMsg.content, 'Hello');
+    test(
+      'ChatMessage creates user, assistant, and system messages correctly',
+      () {
+        final userMsg = ChatMessage.user('Hello');
+        expect(userMsg.role, ChatRole.user);
+        expect(userMsg.isUser, isTrue);
+        expect(userMsg.content, 'Hello');
 
-      final assistantMsg = ChatMessage.assistant('Meow! How can I help?');
-      expect(assistantMsg.role, ChatRole.assistant);
-      expect(assistantMsg.isAssistant, isTrue);
+        final assistantMsg = ChatMessage.assistant('Meow! How can I help?');
+        expect(assistantMsg.role, ChatRole.assistant);
+        expect(assistantMsg.isAssistant, isTrue);
 
-      final sysMsg = ChatMessage.system('System instruction');
-      expect(sysMsg.role, ChatRole.system);
-      expect(sysMsg.isSystem, isTrue);
+        final sysMsg = ChatMessage.system('System instruction');
+        expect(sysMsg.role, ChatRole.system);
+        expect(sysMsg.isSystem, isTrue);
 
-      final json = userMsg.toJson();
-      expect(json['role'], 'user');
-      expect(json['content'], 'Hello');
+        final json = userMsg.toJson();
+        expect(json['role'], 'user');
+        expect(json['content'], 'Hello');
 
-      final parsed = ChatMessage.fromJson(json);
-      expect(parsed.role, ChatRole.user);
-      expect(parsed.content, 'Hello');
-    });
+        final parsed = ChatMessage.fromJson(json);
+        expect(parsed.role, ChatRole.user);
+        expect(parsed.content, 'Hello');
+      },
+    );
 
     test('a text message serializes its content as a plain string', () {
       final message = ChatMessage.user('Hello');
@@ -110,18 +113,15 @@ void main() {
         'choices': [
           {
             'index': 0,
-            'message': {
-              'role': 'assistant',
-              'content': 'Purr! Hello there!',
-            },
+            'message': {'role': 'assistant', 'content': 'Purr! Hello there!'},
             'finish_reason': 'stop',
-          }
+          },
         ],
         'usage': {
           'prompt_tokens': 12,
           'completion_tokens': 8,
           'total_tokens': 20,
-        }
+        },
       };
 
       final response = ChatResponse.fromGroqJson(mockGroqJson);
@@ -132,10 +132,7 @@ void main() {
     });
 
     test('ChatResponse throws FormatException on empty choices', () {
-      final emptyJson = {
-        'model': 'openai/gpt-oss-20b',
-        'choices': <dynamic>[],
-      };
+      final emptyJson = {'model': 'openai/gpt-oss-20b', 'choices': <dynamic>[]};
 
       expect(
         () => ChatResponse.fromGroqJson(emptyJson),
@@ -143,41 +140,61 @@ void main() {
       );
     });
 
-    test('AiException provides safe user-friendly messages without credentials', () {
-      final missingKey = AiException.missingApiKey();
-      expect(missingKey.type, AiErrorType.missingApiKey);
-      expect(missingKey.userFriendlyMessage, contains('Groq API key is not configured'));
+    test(
+      'AiException provides safe user-friendly messages without credentials',
+      () {
+        final missingKey = AiException.missingApiKey();
+        expect(missingKey.type, AiErrorType.missingApiKey);
+        expect(
+          missingKey.userFriendlyMessage,
+          contains('Groq API key is not configured'),
+        );
 
-      final invalidKey = AiException.invalidApiKey();
-      expect(invalidKey.type, AiErrorType.invalidApiKey);
-      expect(invalidKey.userFriendlyMessage, contains('rejected'));
+        final invalidKey = AiException.invalidApiKey();
+        expect(invalidKey.type, AiErrorType.invalidApiKey);
+        expect(invalidKey.userFriendlyMessage, contains('rejected'));
 
-      final network = AiException.networkUnavailable('SocketException');
-      expect(network.type, AiErrorType.networkUnavailable);
-      expect(network.userFriendlyMessage, contains('internet connection'));
+        final network = AiException.networkUnavailable('SocketException');
+        expect(network.type, AiErrorType.networkUnavailable);
+        expect(network.userFriendlyMessage, contains('internet connection'));
 
-      final timeout = AiException.timeout();
-      expect(timeout.type, AiErrorType.timeout);
-      expect(timeout.userFriendlyMessage, contains('timed out'));
+        final timeout = AiException.timeout();
+        expect(timeout.type, AiErrorType.timeout);
+        expect(timeout.userFriendlyMessage, contains('timed out'));
 
-      // Ensure no raw secret is leaked in toString
-      expect(invalidKey.toString(), isNot(contains('sk-')));
-      expect(invalidKey.toString(), isNot(contains('gsk_')));
-    });
+        // Ensure no raw secret is leaked in toString
+        expect(invalidKey.toString(), isNot(contains('sk-')));
+        expect(invalidKey.toString(), isNot(contains('gsk_')));
+      },
+    );
 
-    test('KittenSystemPrompt explicitly restricts phone and background features', () {
-      final prompt = KittenSystemPrompt.prompt;
-      expect(prompt, contains('Kitten'));
-      expect(prompt, contains('phone'));
-      expect(prompt, contains('alarms'));
-      expect(prompt, contains('calls'));
-      expect(prompt, contains('CRITICAL SCOPE CONSTRAINTS'));
-    });
+    test(
+      'KittenSystemPrompt enables hand-offs but forbids silent device actions',
+      () {
+        final prompt = KittenSystemPrompt.prompt;
+        expect(prompt, contains('Kitten'));
+        expect(prompt, contains('CRITICAL SCOPE CONSTRAINTS'));
+
+        // The explicit hand-offs the tool registry actually exposes.
+        expect(prompt, contains('phone hand-offs'));
+        expect(prompt, contains('dialer'));
+        expect(prompt, contains('SMS composer'));
+        expect(prompt, contains('Alarms and timers'));
+
+        // ...while anything that acts behind the user's back stays forbidden.
+        expect(prompt, contains('never claim or promise'));
+        expect(prompt, contains('without the user confirming it'));
+        expect(prompt, contains('Listen continuously in the background'));
+      },
+    );
 
     test('AiConfig has valid default and supported models', () {
       expect(AiConfig.defaultModel, 'openai/gpt-oss-20b');
       expect(AiConfig.availableModels, contains(AiConfig.defaultModel));
-      expect(AiConfig.availableModels, contains('openai/gpt-oss-safeguard-20b'));
+      expect(
+        AiConfig.availableModels,
+        contains('openai/gpt-oss-safeguard-20b'),
+      );
     });
   });
 }

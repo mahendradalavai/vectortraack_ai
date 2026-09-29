@@ -16,15 +16,17 @@ void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
 
   group('app awareness on device', () {
-    testWidgets('the platform channel reports access and the last used app',
-        (tester) async {
+    testWidgets('the platform channel reports access and the last used app', (
+      tester,
+    ) async {
       final service = MethodChannelAppAwarenessService();
 
       expect(service.isSupported, isTrue);
       expect(
         await service.hasUsageAccess(),
         isTrue,
-        reason: 'grant it with: adb shell appops set com.example.kitten '
+        reason:
+            'grant it with: adb shell appops set com.example.kitten '
             'GET_USAGE_STATS allow',
       );
 
@@ -41,7 +43,9 @@ void main() {
       );
     });
 
-    testWidgets('the controller turns that into prompt context', (tester) async {
+    testWidgets('the controller turns that into prompt context', (
+      tester,
+    ) async {
       final controller = AppAwarenessController(
         service: MethodChannelAppAwarenessService(),
       );
@@ -61,8 +65,9 @@ void main() {
       controller.dispose();
     });
 
-    testWidgets('the Settings switch reflects the real permission state',
-        (tester) async {
+    testWidgets('the Settings switch reflects the real permission state', (
+      tester,
+    ) async {
       await tester.pumpWidget(const KittenApp());
       await tester.pump(const Duration(milliseconds: 500));
 
@@ -79,9 +84,30 @@ void main() {
       await tester.pump();
 
       // Access is already granted, so the screen should say so truthfully
-      // before the user touches anything.
-      expect(find.textContaining('grant Usage access'), findsNothing);
-      expect(find.text('Granted'), findsOneWidget);
+      // before the user touches anything. The finder is scoped to the Usage
+      // Access tile because the Floating Kitten permission tile also reads
+      // "Granted" as soon as overlay access is allowed, and a bare
+      // find.text('Granted') would match either one.
+      final usageTile = find.widgetWithText(ListTile, 'Usage Access');
+      await tester.scrollUntilVisible(
+        usageTile,
+        200,
+        scrollable: find.byType(Scrollable).first,
+      );
+      await tester.pump();
+      expect(
+        find.descendant(of: usageTile, matching: find.text('Granted')),
+        findsOneWidget,
+      );
+
+      // Scrolling down to Usage Access pushed the switch out of the viewport,
+      // where the list has since disposed it, so bring it back before tapping.
+      await tester.scrollUntilVisible(
+        switchTile,
+        -200,
+        scrollable: find.byType(Scrollable).first,
+      );
+      await tester.pump();
 
       await tester.tap(switchTile);
       await tester.pump(const Duration(milliseconds: 500));

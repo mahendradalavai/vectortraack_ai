@@ -4,4 +4,20 @@
          to allow setting breakpoints, to provide hot reload, etc.
     -->
     <uses-permission android:name="android.permission.INTERNET"/>
+
+    <!-- Impeller does not present a single frame on the Pixel_7 emulator here:
+         the engine loads, the Dart VM starts, and the app reports RESUMED, but
+         `dumpsys` shows `firstWindowDrawn=false` with 0 frames rendered, so the
+         Android splash screen stays up forever. It fails the same way on the
+         host GPU and on `swiftshader_indirect`, which makes it a renderer
+         problem rather than an app or emulator-GPU one.
+         The opt-out lives in the debug manifest on purpose: emulator and
+         development builds need to draw, while release builds on real hardware
+         still get Impeller's renderer, where it works correctly.
+    -->
+    <application>
+        <meta-data
+            android:name="io.flutter.embedding.android.EnableImpeller"
+            android:value="false" />
+    </application>
 </manifest>

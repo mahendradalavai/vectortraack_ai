@@ -7,12 +7,17 @@ class ChatRequest {
     this.model,
     this.temperature = 0.7,
     this.maxTokens = 1024,
+    this.tools,
   });
 
   final List<ChatMessage> messages;
   final String? model;
   final double temperature;
   final int maxTokens;
+
+  /// The tools the model may call, already in OpenAI-compatible shape, or null
+  /// when this turn should be a plain text exchange.
+  final List<Map<String, dynamic>>? tools;
 
   /// Serializes the request into an OpenAI-compatible payload.
   ///
@@ -27,6 +32,12 @@ class ChatRequest {
         'temperature': temperature,
         'max_tokens': maxTokens,
         if (stream) 'stream': true,
+        // Offered with 'auto' choice so the model may simply answer in text
+        // when no tool would help.
+        if (tools != null && tools!.isNotEmpty) ...{
+          'tools': tools,
+          'tool_choice': 'auto',
+        },
       };
 
   /// A copy of this request told to use [model] instead.
@@ -38,5 +49,6 @@ class ChatRequest {
         model: model,
         temperature: temperature,
         maxTokens: maxTokens,
+        tools: tools,
       );
 }

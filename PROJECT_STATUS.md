@@ -6,7 +6,7 @@
 - **Framework:** Flutter 3.47.5 (stable channel)
 - **Target platform:** Android (primary), with iOS/Web/Windows/macOS/Linux scaffolding present
 - **Version control:** Git repository. Baseline `492be59`, Task 003 closure `4ed421c`.
-- **Current development stage:** Task 008 complete — Kitten can now look at your screen on demand: one press, Android's consent prompt, one screenshot, and an answer from a vision model that streams into the same conversation.
+- **Current development stage:** Floating Kitten overlay and opt-in background assistant implemented; device verification covers build, install, permissions, and app startup. The overlay now also greets the user, comments on the app they open, and starts the conversation when tapped; that loop is verified on the Pixel 7 through the overlay window's own geometry.
 
 ## Environment
 
@@ -38,9 +38,225 @@
 5. **Task 005 — "Hey Kitten" Activation** — opt-in, foreground-only wake-word listening with remainder-as-command.
 6. **Task 006 — Kitten Animation / Personality System** — procedural animated character and an evolving mood described below.
 7. **Task 007 — Android App-Awareness** — Android usage-stat tracking behind an explicit permission, surfaced in the UI and in Kitten's prompt, described below.
-8. **Task 008 — Screen Understanding** — on-demand screenshot capture with explicit consent, answered by a vision model, described below.
+**Task 008 — Screen Understanding with Explicit Permission**
+Status: **COMPLETED**
 
-## Current Task
+8. **Task 008 — Screen Understanding** — on-demand screenshot capture with explicit consent, answered by a vision model, described below.
+9. **Task 010 — Phone Capabilities** — user-confirmed dialer, SMS composer, alarm, timer, and app-launch actions through Android system intents.
+10. **Floating Kitten Overlay** — explicit Android overlay permission, native draggable avatar service, Settings controls, and Flutter platform controller.
+11. **Background Assistant** — opt-in microphone foreground service with “Hey Kitty”/“Kitty” wake detection, safe command handoff, and unlock/reboot restoration.
+12. **Floating Overlay Conversation Loop** — Kitten's lines shown in a speech bubble, a microphone-free foreground-app watch owned by the overlay, and a tap that opens the conversation already knowing which app the user came from, described below.
+
+### Floating Overlay Conversation Loop
+
+Status: **VERIFIED on device**
+
+Turned the overlay from a cat that opens the app into the one that starts the
+conversation:
+
+```
+Phone unlocked
+  -> Kitten appears
+  -> "Hey! What are you doing today?"
+  -> user opens an app
+  -> Kitten: "Instagram? What are we doing here?"
+  -> user taps the cat
+  -> the conversation opens already knowing the app
+```
+
+- **Speech bubble (selected behaviour):** the overlay window is no longer a
+  fixed square. It is exactly as large as it needs to be — the cat alone, or the
+  cat plus a rounded bubble with a tail pointing at it — and the cat is the
+  anchor, so the cat never moves when a line appears. The bubble goes on
+  whichever side has room, wrapping to at most four lines.
+- **Greeting on arrival (selected behaviour):** the service shows
+  "Hey! What are you doing today?" the moment the overlay starts, which includes
+  the unlock and reboot restart `BackgroundAssistantReceiver` already performs.
+- **App watching without the microphone (selected behaviour):** the overlay
+  itself polls Android's usage events (`MOVE_TO_FOREGROUND`, every 2.5 seconds
+  over a 20-second window) and says a line the first time a *different* app
+  appears. It needs only the `GET_USAGE_STATS` app-op: no audio foreground
+  service, no `RECORD_AUDIO`, no notification. Kitten never comments on an app
+  the user left more than 20 seconds ago, and never reports itself.
+- **Kitten's line, in Kitten's words:** `Instagram? What are we doing here?`,
+  `WhatsApp? Who are we texting?`, `YouTube? Study or entertainment?`,
+  `Chrome? What are we looking for?`, `Spotify? What are we listening to?`, and
+  `"<App>? What are we doing here?"` for anything else.
+- **Tap starts the conversation (selected behaviour):** tapping the cat hands
+  the package, label, and *the same line the bubble showed* to `MainActivity`.
+  The chat seeds that line as Kitten's own opening message — locally, with no
+  model request — focuses the input field, and the reply that follows is written
+  with the app in view through the existing awareness prompt context.
+- **A cold tap is not lost:** tapping the cat usually cold-starts the activity,
+  where a pushed channel call would arrive before Flutter has a handler. The
+  native side stashes the hand-off, Dart takes it on start and on resume, and
+  acknowledges it so a warm start is not delivered twice. `ChatService` also
+  ignores a repeat of the line it just seeded, covering the race between the two.
+- **One voice for app lines:** `BackgroundAssistantService` no longer announces
+  the foreground app. That line belongs to the overlay now, which shows it
+  whether or not the microphone is on, so the two can never both say it. The
+  wake-word service keeps the microphone, its acknowledgement lines, and the
+  hand-off of a spoken command to the app.
+
+#### Conversation loop verification
+
+- `flutter analyze`: **0 issues**.
+- `flutter test`: **166 of 166 pass**. (An earlier note recorded one failure
+  here; it was the stale system-prompt assertion described under Known
+  Problems, and it is fixed.)
+- Whole device suite on the Pixel 7 — **8 of 8 pass**:
+  `app_awareness_test.dart` 3/3, `floating_overlay_test.dart` 1/1,
+  `screen_understanding_test.dart` 4/4, the last including a real vision
+  round-trip. See Testing for the per-file run recipe the app-ops require.
+- Two tests were hardened after failing on a freshly booted device. The overlay
+  test had assumed it started stopped, but a boot or unlock restores the
+  floating Kitten when it was enabled before, so it now clears anything already
+  running. The awareness test asserted a bare `find.text('Granted')`, which
+  matched twice once the new *Overlay permission* row also read "Granted"; that
+  finder is now scoped to the Usage Access tile. Both were test assumptions that
+  the overlay work invalidated, not app defects.
+- New tests: 6 in `test/core/overlay/floating_overlay_controller_test.dart`
+  (push, acknowledgement, one-shot take, disposal, payload parsing) and 3 in
+  `test/features/home/overlay_handoff_test.dart` (cold-start tap, live hand-off,
+  duplicate hand-off), plus 4 `ChatService` seeding tests.
+- `flutter build apk --debug`: succeeded, which is what compiles the Kotlin.
+- `integration_test/floating_overlay_test.dart` on the Pixel 7
+  (Android 17 / API 37): **1 of 1 passed**, including the new hand-off channel
+  call. Reproduce with:
+
+```bash
+adb install -r build/app/outputs/flutter-apk/app-debug.apk
+adb shell appops set com.example.kitten SYSTEM_ALERT_WINDOW allow
+adb shell appops set com.example.kitten GET_USAGE_STATS allow
+flutter test integration_test/floating_overlay_test.dart -d emulator-5554
+```
+
+##### What the device run actually proved
+
+The overlay window's geometry was read from `dumpsys window windows` while the
+service ran, because the bubble is a native window that no Flutter test can
+observe. The numbers below are real frames, at 420 dpi where the 76 dp cat is
+200 px:
+
+| Moment | Overlay window | Cat on screen |
+|--------|----------------|---------------|
+| Greeting showing | `frame=[301,1236][1038,1436]` (737x200) | `x 838..1038`, `y 1236..1436` |
+| After 6.5 s, bubble hidden | `frame=[838,1236][1038,1436]` (200x200) | `x 838..1038`, `y 1236..1436` |
+| Chrome opened | `Requested w=781 h=200` | same place |
+
+- **The greeting appears:** the service's window is 737x200 — 200 px of cat plus
+  a bubble — as soon as it starts, and the window's `mAttrs` confirm
+  `ty=APPLICATION_OVERLAY` and `fl=NOT_FOCUSABLE`.
+- **The cat does not move.** The window grows to the *left* of the cat, so the
+  cat's own rect is byte-identical in both states. That was the point of
+  anchoring the layout on the cat instead of the window.
+- **The bubble is sized to its text:** 737 px for
+  "Hey! What are you doing today?" and 781 px for the longer
+  "Chrome? What are we looking for?".
+- **It hides itself:** after 6.5 seconds the window collapses back to 200x200
+  with no leftover space.
+- **The watch fires from the overlay alone:** with only the two app-ops granted
+  and *no* background listening, launching Chrome made the overlay show its
+  Chrome line within about a second, then hide again. It then stayed quiet — one
+  line per app, not a repeat every poll.
+- **The tap hands over:** `adb shell input tap` on the cat (938,1336, computed
+  from the window frame) brought `com.example.kitten/.MainActivity` to the front
+  as the resumed activity, and `dumpsys input_method` then reported
+  `mInputShown=true` on the Flutter view — that is the seeded hand-off focusing
+  the chat input, which is the only place that requests focus on arrival.
+- **No crashes:** no `FATAL EXCEPTION` in logcat and nothing for the app in
+  `logcat -b crash`.
+- **Not verified:** what the bubble *looks* like to a human (a geometry dump
+  proves size and position, not that the drawing is attractive), and
+  `uiautomator dump` returns an empty tree for Flutter here, so the seeded
+  sentence was confirmed indirectly through input focus rather than by reading
+  it off the screen.
+
+### Background Assistant
+
+Status: **PARTIALLY VERIFIED**
+
+- Added an explicit Settings toggle for background listening. Android shows a persistent
+  notification while it is enabled.
+- Added a native microphone foreground service using Android `SpeechRecognizer`; it listens for
+  “Hey Kitty” or “Kitty” and hands the remainder to the existing Flutter chat/tool system.
+- Commands are not executed silently in the service. The main Kitten app receives the command,
+  so existing confirmation-safe phone and alarm tools remain in charge.
+- Added app-name-only prompts for WhatsApp, Instagram, YouTube, Chrome, and other foreground apps
+  when Usage Access is already granted. Kitten does not read app contents, messages, or
+  notifications. *(Superseded by the Floating Overlay Conversation Loop, where these became the
+  overlay's speech bubble so they appear whether or not the microphone is on.)*
+- Added reboot/unlock restoration for explicitly enabled background listening and the explicitly
+  enabled Floating Kitten overlay.
+- Added `FOREGROUND_SERVICE_MICROPHONE` and `RECEIVE_BOOT_COMPLETED`; no AccessibilityService,
+  notification-reading permission, or new dependency was added.
+
+#### Background Assistant verification
+
+- Focused controller and overlay tests: **7 of 7 passed**.
+- `flutter analyze`: exits successfully; only 3 existing informational lints remain in the
+  earlier Task 010 phone-capability files.
+- Android debug APK: built successfully.
+- Pixel 7: APK installed, microphone and overlay app-ops granted, manifest service/receiver
+  entries present, and Kitten remained alive after launch.
+- **Not yet manually verified:** a real spoken wake phrase, an app-switch prompt, or a complete
+  alarm/call command on the emulator. The emulator has no reliable microphone input, and the
+  Flutter integration runner previously reported `No tests were found` for the overlay test.
+
+### Floating Kitten Overlay
+
+Status: **PARTIALLY VERIFIED**
+
+- Added a Flutter `FloatingOverlayController` and platform interface for support, permission,
+  settings, start, stop, and native running-state checks.
+- Added the Android `FloatingKittenService`, a non-exported foreground service using
+  `TYPE_APPLICATION_OVERLAY`. It draws a compact procedural kitten, clamps dragging to the
+  display bounds, and opens the existing Kitten activity when tapped.
+- Extended by the Floating Overlay Conversation Loop: the same service now draws Kitten's lines
+  in a bubble, watches which app the user opens without needing the microphone, and tells the
+  activity which app the tap came from.
+- Added explicit `SYSTEM_ALERT_WINDOW` permission and a real Settings section. The overlay is
+  off by default, never starts merely because permission is granted, and Settings only shows
+  running after the native service confirms it.
+- The overlay does not capture the screen, read notifications, use the microphone, listen for
+  wake words, or inspect other apps.
+
+#### Floating Kitten verification
+
+- `flutter pub get`: completed.
+- Overlay controller tests: **4 of 4 passed**.
+- `flutter analyze`: exits successfully with 3 pre-existing informational lints in the Task 010
+  phone-capability files; no overlay diagnostics.
+- `flutter build apk --debug`: succeeded.
+- Pixel 7 (`emulator-5554`): APK installed, `SYSTEM_ALERT_WINDOW` app-op was granted, and the
+  normal Kitten activity launched. The Flutter integration runner built the APK but then reported
+  `No tests were found` for `integration_test/floating_overlay_test.dart`, so drag, tap-to-open,
+  app-switch persistence, and Settings navigation were **not** claimed as manually verified.
+- The test setup now pumps `KittenApp` before invoking the platform channel; a rerun is still
+  needed when the integration runner can discover the test reliably.
+- **Crash fix:** Android 14+ requires the runtime foreground-service type to match the manifest;
+  `FloatingKittenService` now calls `startForeground` with
+  `FOREGROUND_SERVICE_TYPE_SPECIAL_USE` and catches startup failures instead of terminating the
+  app.
+
+### Task 010 — Phone Capabilities
+
+Status: **COMPLETED**
+
+- Added five AI tools: `open_dialer`, `compose_message`, `set_alarm`, `set_timer`, and `open_app`.
+- Calls and messages open the native composer only; Kitten never places a call or sends an SMS automatically.
+- Alarms and timers open the system Clock UI for review and confirmation. No alarm permission or background service is used.
+- App launching accepts an Android package name and reports clearly when the app is not installed.
+- The Android method channel fails soft on unsupported platforms or when no handler exists.
+- Registered the existing time and current-app tools alongside the new phone tools in production.
+
+#### Task 010 verification
+
+- Focused unit tests passed: **22 of 22** (`chat_service_test.dart` and `phone_action_tools_test.dart`).
+- Android debug APK compiled successfully after the native channel was added.
+- No new runtime permissions or third-party dependencies were required.
+
+## Previous task
 
 **Task 008 — Screen Understanding with Explicit Permission**
 Status: **COMPLETED**
@@ -285,16 +501,18 @@ Status: **COMPLETED**
 
 ## Pending Tasks
 
-Awaiting instructions for Task 009 (assistant tool/function system).
+- **A human look at the speech bubble.** Its geometry, text-driven sizing, and
+  auto-hide are verified from the window dump; nobody has judged how it looks.
+- Task 009 (assistant tool/function system) was built in practice — the tool
+  registry, the built-in time/app tools, and the Task 010 phone tools all exist —
+  but it has never been formally closed out in this document.
 
 ## Features Planned
 
 The following are planned but **NOT yet implemented**:
 
-- Floating kitten overlay
-- Background listening / service
 - Usage-history analysis beyond the single most recent app
-- Context-aware questions driven by the app (the context is now available; richer prompts are not)
+- Richer app-aware conversation than the one fixed line Kitten says in its bubble
 - Continuous or automatic screen watching (capture is deliberately one-shot and on demand)
 - Phone assistant commands (device settings, volume, etc.)
 - Alarm & timer commands
@@ -334,6 +552,20 @@ The following are planned but **NOT yet implemented**:
 | `lib/core/voice/services/voice_controller.dart` | 004 | Hands-free listen -> chat -> speak loop |
 | `lib/core/voice/util/voice_text_cleaner.dart` | 004 | Strips stage directions/emoji before speaking |
 | `lib/core/voice/util/wake_word_matcher.dart` | 005 | Pure wake-phrase matcher with remainder extraction |
+| `lib/core/overlay/services/floating_overlay_service.dart` | Floating Overlay | Platform contract for overlay permission and lifecycle |
+| `lib/core/overlay/services/method_channel_floating_overlay_service.dart` | Floating Overlay | Android method-channel implementation |
+| `lib/core/overlay/services/floating_overlay_controller.dart` | Floating Overlay | Flutter state controller for permission and running state |
+| `test/core/overlay/floating_overlay_controller_test.dart` | Floating Overlay | Controller state, denial, and failure tests |
+| `integration_test/floating_overlay_test.dart` | Floating Overlay | Pixel 7 overlay lifecycle test |
+| `android/app/src/main/kotlin/com/example/kitten/FloatingKittenService.kt` | Floating Overlay | Native draggable overlay foreground service |
+| `lib/core/background/services/background_assistant_service.dart` | Background Assistant | Platform contract for opt-in background listening |
+| `lib/core/background/services/method_channel_background_assistant_service.dart` | Background Assistant | Method-channel implementation |
+| `lib/core/background/services/background_assistant_controller.dart` | Background Assistant | Flutter state and command stream controller |
+| `test/core/background/background_assistant_controller_test.dart` | Background Assistant | Enable, disable, and failure tests |
+| `android/app/src/main/kotlin/com/example/kitten/BackgroundAssistantService.kt` | Background Assistant | Native wake-phrase and app-context foreground service |
+| `android/app/src/main/kotlin/com/example/kitten/BackgroundAssistantReceiver.kt` | Background Assistant | Unlock/reboot restoration receiver |
+| `lib/core/overlay/models/overlay_app_context.dart` | Conversation Loop | The app the overlay hands to the chat, with display-name and line fallbacks |
+| `test/features/home/overlay_handoff_test.dart` | Conversation Loop | Cold-start, live, and duplicate hand-off into the conversation |
 | `lib/core/screen/config/screen_config.dart` | 008 | Default question, capture timeout, and the privacy-note key |
 | `lib/core/screen/services/screen_capture_service.dart` | 008 | Abstract capture contract + typed `ScreenCaptureException` |
 | `lib/core/screen/services/method_channel_screen_capture_service.dart` | 008 | Native-channel capture implementation |
@@ -397,6 +629,22 @@ The following are planned but **NOT yet implemented**:
 | `android/app/src/main/kotlin/com/example/kitten/MainActivity.kt` | 007 | Hosts the `kitten/app_awareness` method channel |
 | `test/widget_test.dart` | 007 | Mocks the awareness channel so Settings does not hang waiting on it |
 | `android/app/src/main/AndroidManifest.xml` | 004, 007 | Added `RECORD_AUDIO` and speech/TTS `<queries>` visibility; then `PACKAGE_USAGE_STATS` |
+| `android/app/src/main/AndroidManifest.xml` | Floating Overlay | Added `SYSTEM_ALERT_WINDOW` and the non-exported overlay service |
+| `android/app/src/main/kotlin/com/example/kitten/MainActivity.kt` | Floating Overlay | Added overlay permission and lifecycle method channel |
+| `lib/features/home/presentation/pages/home_page.dart` | Floating Overlay | Shares the overlay controller with Settings |
+| `lib/features/settings/presentation/pages/settings_page.dart` | Floating Overlay | Added Floating Kitten permission and start/stop controls |
+| `lib/features/home/presentation/pages/home_page.dart` | Background Assistant | Routes native wake commands into chat |
+| `lib/features/settings/presentation/pages/settings_page.dart` | Background Assistant | Added opt-in background listening toggle |
+| `android/app/src/main/kotlin/com/example/kitten/MainActivity.kt` | Background Assistant | Added service controls and command handoff |
+| `android/app/src/main/AndroidManifest.xml` | Background Assistant | Added microphone service, receiver, and permissions |
+| `android/app/src/main/kotlin/com/example/kitten/FloatingKittenService.kt` | Conversation Loop | Speech bubble, a microphone-free foreground-app watch, and the tap hand-off |
+| `android/app/src/main/kotlin/com/example/kitten/MainActivity.kt` | Conversation Loop | Stashes the handed-over app and answers `takeAppContext`/`acknowledgeAppContext` |
+| `android/app/src/main/kotlin/com/example/kitten/BackgroundAssistantService.kt` | Conversation Loop | Dropped the spoken app announcements, which are the overlay's job now |
+| `lib/core/overlay/services/floating_overlay_service.dart` | Conversation Loop | Hand-off contract: push, take, and acknowledge |
+| `lib/core/overlay/services/method_channel_floating_overlay_service.dart` | Conversation Loop | Listens for pushed hand-offs and takes the stashed one |
+| `lib/core/overlay/services/floating_overlay_controller.dart` | Conversation Loop | Exposes hand-offs as a stream plus a one-shot take |
+| `lib/core/ai/services/chat_service.dart` | Conversation Loop | `seedAssistantMessage` opens a conversation Kitten started itself |
+| `lib/features/home/presentation/pages/home_page.dart` | Conversation Loop | Seeds and focuses the input when the overlay hands an app over |
 | `test/widget_test.dart` | 002, 003 | Covers chat input, settings navigation, AI settings section |
 
 ## Dependencies
@@ -424,6 +672,9 @@ The following are planned but **NOT yet implemented**:
 | `android.permission.FOREGROUND_SERVICE` | 008 | Hosting the short-lived capture service |
 | `android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION` | 008 | Required on Android 14+ to project the screen at all |
 | `android.permission.POST_NOTIFICATIONS` | 008 | Declared for the capture notice; not requested at runtime yet |
+| `android.permission.SYSTEM_ALERT_WINDOW` | Floating Overlay | User-granted permission to draw Kitten above other apps |
+| `android.permission.FOREGROUND_SERVICE_MICROPHONE` | Background Assistant | Required for the visible microphone foreground service |
+| `android.permission.RECEIVE_BOOT_COMPLETED` | Background Assistant | Restores explicitly enabled services after reboot/unlock |
 
 `RECORD_AUDIO` is requested at runtime when the user first taps Talk; denied or unavailable
 speech input degrades the app to text-only mode rather than failing.
@@ -446,6 +697,7 @@ requested.
 | Task 006 | 0 issues | 98/98 passed |
 | Task 007 | 0 issues | 123/123 passed (+ 3/3 on-device) |
 | Task 008 | **0 issues** | **143/143 passed** (+ 3/3 on-device, 1 skipped) |
+| Conversation Loop | **0 issues** | **166/166 passed** + **8/8 on-device** |
 
 Task 008 suite breakdown (13 suites total):
 
@@ -463,11 +715,35 @@ Task 008 suite breakdown (13 suites total):
 - `screen_understanding_controller_test.dart`: 13
 - `widget_test.dart`: 1
 
-Plus on-device suites: `integration_test/app_awareness_test.dart` (3 tests, requires Usage
-Access) and `integration_test/screen_understanding_test.dart` (4 tests, requires the
-`PROJECT_MEDIA` app-op; the live vision round-trip skips without a Groq API key).
-Note that `flutter test integration_test/...` **uninstalls** the app when it finishes, which also
-clears the granted app-op — so install and grant immediately before each run.
+On-device suites, all 8 tests passing on the Pixel 7 emulator:
+
+- `app_awareness_test.dart` — 3 tests, requires Usage Access
+- `floating_overlay_test.dart` — 1 test, requires the `SYSTEM_ALERT_WINDOW` app-op
+- `screen_understanding_test.dart` — 4 tests, requires the `PROJECT_MEDIA` app-op
+
+Two things about running them are easy to get wrong:
+
+- **Run one file per invocation, and grant the app-op just before each one.**
+  `flutter test integration_test/...` reinstalls the app between files, which resets its
+granted app-ops. Passing the whole directory in one command therefore only leaves the
+  *first* file with working permissions; the rest fail as if the user had never granted
+  anything. The reliable recipe is install → grant → run, once per file:
+
+  ```bash
+  adb install -r build/app/outputs/flutter-apk/app-debug.apk
+  adb shell appops set com.example.kitten SYSTEM_ALERT_WINDOW allow
+  adb shell appops set com.example.kitten GET_USAGE_STATS allow
+  adb shell appops set com.example.kitten PROJECT_MEDIA allow
+  flutter test integration_test/<file>_test.dart -d emulator-5554
+  ```
+
+- **The vision round-trip needs a key, and it can be passed at run time** rather than typed
+  onto the device, so no secret is written to disk or committed:
+
+  ```bash
+  flutter test integration_test/screen_understanding_test.dart -d emulator-5554 \
+    --dart-define=GROQ_API_KEY=gsk_...
+  ```
 
 ## Security Review Result
 
@@ -507,9 +783,13 @@ clears the granted app-op — so install and grant immediately before each run.
   (`com.spotify.music` shows as "Music").
 - **No awareness while backgrounded:** polling stops when the app leaves the foreground, so
   awareness resumes with whatever it last saw rather than tracking continuously.
-- **The vision model is only exercised on a machine with an API key.** On this emulator the
-  capture path is fully verified, but nothing has yet confirmed what `qwen/qwen3.8-27b` says
-  about a real screenshot.
+- **The vision model has now been seen answering for real.** A 28,770-byte screenshot of the
+  emulator reached `qwen/qwen3.8-27b` and came back with a reply that correctly described what
+  was on screen ("That little screen is just the Kitten app loading up…"). This closes the gap
+  that had been open since Task 008, whose on-device result was recorded as PASS with the live
+  answer still pending a configured key. The round-trip still needs a key to run at all, and it
+  is exercised by passing one at run time (`--dart-define=GROQ_API_KEY=...`) rather than typing
+  a secret into the device.
 - **Consent is asked every single time.** That is deliberate for privacy, but it means the
   feature never becomes one-tap in practice; Android's own "remember this decision" option is
   the only shortcut.
@@ -519,6 +799,44 @@ clears the granted app-op — so install and grant immediately before each run.
   older screenshots remain in memory and in the visible chat until the conversation is cleared.
 - **No OCR or accessibility fallback:** if the vision model cannot read something (small text,
   handwriting), Kitten has no second path to the screen's content.
+- **The overlay watches on Usage Access alone.** Its app bubble runs whenever the special
+  `GET_USAGE_STATS` app-op is granted and the floating Kitten is on, independently of the App
+  Awareness switch in Settings. That matches the background assistant, which polled the same
+  app-op, but the Settings switch is therefore not the only thing that decides whether apps are
+  noticed.
+- **Bubble lines are fixed flavour.** Five named apps get a tailored question and everything else
+  gets "`<App>? What are we doing here?`". No model is involved and nothing is learned.
+- **The bubble is transient.** It auto-hides after 6.5 seconds, cannot be tapped or scrolled on
+  its own, and only reappears for a *different* app.
+- **Only the tap is wired up.** Dragging the cat leaves the bubble where it is, and there is no
+  way to ask Kitten to repeat what it just said.
+- **The bubble's looks are unverified by eye.** The device run proved the window's size,
+  position, and lifecycle, but nobody has looked at the drawing itself on a screen.
+- **Only Chrome was exercised for the app watch.** The watch itself is app-agnostic, but only
+  one real app switch has been observed.
+- **The seeded sentence was confirmed indirectly.** `uiautomator dump` yields an empty tree for
+  a Flutter app here, so the hand-off was proven through the input focus it triggers rather than
+  by reading the line off the screen.
+- **The prompt test was brought up to date.** `ai_models_test.dart`'s assertion still expected
+  the old wording that *forbade* phone features, which stopped being true once the registered
+  hand-offs landed. It now asserts both halves of the real contract: that the dialer, SMS
+  composer, and alarms/timers are advertised, and that nothing acts without the user confirming
+  it. The full suite is green again (166 passing).
+- **Debug builds do not render on the Pixel_7 emulator unless Impeller is off.** The engine loads,
+  the Dart VM starts, and the activity reports RESUMED, but `firstWindowDrawn=false` with **0 frames
+  rendered**, so the Android splash screen stays up indefinitely. The app is not at fault: the same
+  `main.dart` renders 40 frames with Impeller off, and the **release** build renders correctly with
+  Impeller on, which is why this only ever broke the development loop and never a real phone. The
+  opt-out lives in `android/app/src/debug/AndroidManifest.xml` so release keeps Impeller; if debug
+  builds ever go blank again, that file is the first thing to check.
+- **The emulator crash-loops the UWB HAL, which can stall SystemUI.** `vendor.uwb_hal` aborts with
+  `failed to open the serial device: No such device or address` because `/dev/vport8p2` is never
+  created, and init restarts it roughly every 1.5 seconds (800+ tombstones, measured). That steady
+  tombstone load is enough to trigger a "System UI isn't responding" dialog. It cannot be stopped
+  from the guest: `setprop ctl.stop` is SELinux-denied and `adb root` is refused on this Play-store
+  image, and emulator 37.1.11 has no `Uwb` feature flag to disable. A non-Play-store `google_apis`
+  image is the likely fix. Confirm it is the emulator, not the app, by checking `dumpsys cpuinfo`:
+  `com.example.kitten` sits at 0% while `system_server`, Play services, and the sensors HAL dominate.
 - **Application ID & Signing:** still `com.example.kitten` with debug signing.
 
 ## Decisions
@@ -548,6 +866,18 @@ clears the granted app-op — so install and grant immediately before each run.
 - **App awareness:** Android `UsageStats` through a small native channel and the special
   `GET_USAGE_STATS` app-op, rather than `QUERY_ALL_PACKAGES`. It reports the most recent *other*
   app, is strictly opt-in, and stops when the permission or the foreground state is lost.
+- **Floating overlay:** an explicit `SYSTEM_ALERT_WINDOW` grant starts a non-exported Android
+  foreground service with a compact draggable avatar. The service owns the overlay window and
+  tapping it brings `MainActivity` forward; no AccessibilityService or screen inspection is used.
+- **App lines belong to the overlay:** the comment on the app the user opens is drawn as a
+  bubble by `FloatingKittenService` rather than spoken by the microphone service, so it works
+  silently and without an audio foreground service. Only one of the two can ever say it.
+- **The overlay owns the wording:** the hand-off carries the exact line the bubble showed, so the
+  conversation opens in the same words instead of inventing a second version on the Dart side.
+- **Seeding is local:** Kitten's opening line is added to the conversation without a model
+  request; the app itself reaches the next reply through the existing awareness prompt context.
+- **Hand-offs survive a cold start:** the native side stashes the app it handed over, Dart takes
+  it on start and on resume, and acknowledges it so a warm hand-off is not delivered twice.
 - **Platform verification:** platform-dependent behaviour is verified with on-device
   `integration_test` suites rather than by tapping guessed screen coordinates.
 - **Concern separation:** app awareness owns the knowledge, `ChatService` merely accepts a
@@ -561,7 +891,10 @@ clears the granted app-op — so install and grant immediately before each run.
 
 ## Next Task
 
-**Task 009 — Assistant tool/function system.**
+**Richer app-aware conversation:** the overlay says one fixed line per app, so
+replacing the hardcoded bubble text with a model-written opener — and letting
+Kitten follow up on the app once the chat opens — is the natural next step.
+The pending Task 009 close-out is still outstanding.
 
 ## Task History
 
@@ -690,4 +1023,5 @@ clears the granted app-op — so install and grant immediately before each run.
   `densityDpi` was left at 0 so the projection refused to start; the first image callback was
   treated as a frame and gave up too early; imports were dropped in a rewrite; and the Dart side
   asked for a `String` where the platform sends bytes
-- **Result:** PASS (live vision answer pending a configured API key)
+- **Result:** PASS (the live vision answer was still pending a configured key at the time;
+  it has since been confirmed against a real model — see the Conversation Loop task above)

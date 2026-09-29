@@ -9,6 +9,8 @@ import 'package:kitten/core/ai/providers/ai_provider.dart';
 import 'package:kitten/core/ai/providers/groq_provider.dart';
 import 'package:kitten/core/models/assistant_state.dart';
 import 'package:kitten/core/personality/services/personality_service.dart';
+import 'package:kitten/core/tools/kitten_tool.dart';
+import 'package:kitten/core/tools/tool_registry.dart';
 
 /// Orchestrates chat conversation flow between the user interface
 /// and the configured [AiProvider].
@@ -20,10 +22,11 @@ class ChatService extends ChangeNotifier {
     AiProvider? provider,
     PersonalityService? personality,
     String? Function()? contextProvider,
-  })  : _provider = provider ?? GroqProvider(),
-        _ownsPersonality = personality == null,
-        _promptContext = contextProvider,
-        personality = personality ?? PersonalityService() {
+    this.toolRegistry,
+  }) : _provider = provider ?? GroqProvider(),
+       _ownsPersonality = personality == null,
+       _promptContext = contextProvider,
+       personality = personality ?? PersonalityService() {
     // Mood changes should repaint the UI just like new messages do.
     this.personality.addListener(_onPersonalityChanged);
   }
@@ -37,6 +40,19 @@ class ChatService extends ChangeNotifier {
   /// user was last using. A callback keeps this layer unaware of app
   /// awareness, which owns that knowledge.
   final String? Function()? _promptContext;
+
+  /// The tools Kitten may call, or null when none are offered. Not owned: the
+  /// caller registers tools and keeps the registry alive.
+  final ToolRegistry? toolRegistry;
+
+  /// Names of the tools used in the most recent turn, in call order.
+  List<String> _lastToolUses = [];
+
+  /// Whether a tool turn should be attempted instead of a plain text reply.
+  bool get toolsEnabled => toolRegistry != null && toolRegistry!.isNotEmpty;
+
+  /// The tools used in the most recent turn, or an empty list.
+  List<String> get lastToolUses => List.unmodifiable(_lastToolUses);
 
   AiProvider _provider;
   final List<ChatMessage> _messages = [];
@@ -89,6 +105,32 @@ class ChatService extends ChangeNotifier {
     _cancelRequested = false;
     _assistantState = AssistantState.idle;
     notifyListeners();
+  }
+
+  /// Adds a line Kitten said on its own instead of in reply to the user.
+  ///
+  /// The floating Kitten starts conversations by itself — "Instagram? What are
+  /// we doing here?" — so the line the user already read in the overlay's
+  /// bubble becomes the first message of the conversation, and the next reply
+  /// is written with it in view.
+  ///
+  /// Returns whether the line was added. A repeat of the most recent message is
+  /// ignored, because one hand-off can arrive twice: pushed while Kitten is
+  /// already running, and stashed for a cold start.
+  bool seedAssistantMessage(String text) {
+    final trimmed = text.trim();
+    if (trimmed.isEmpty || _isStreaming) return false;
+
+    final last = _messages.isEmpty ? null : _messages.last;
+    if (last != null && last.isAssistant && last.content.trim() == trimmed) {
+      return false;
+    }
+
+    _messages.add(ChatMessage.assistant(trimmed));
+    _lastError = null;
+    _lastErrorType = null;
+    notifyListeners();
+    return true;
   }
 
   /// Sends a question together with a screenshot for Kitten to look at.
@@ -147,6 +189,9 @@ class ChatService extends ChangeNotifier {
     if (trimmed.isEmpty) return null;
 
     _beginTurn(ChatMessage.user(trimmed));
+    // A tool turn is a request/execute loop rather than a stream, because the
+    // answer is assembled from tool results between requests.
+    if (toolsEnabled) return _runToolTurn();
     return _streamReply();
   }
 
@@ -202,6 +247,59 @@ class ChatService extends ChangeNotifier {
     }
   }
 
+  Future<ChatMessage?> _runToolTurn() async {
+    final tools = toolRegistry!;
+
+    try {
+      for (var round = 0; round < AiConfig.maxToolRounds; round++) {
+        final response = await _provider.sendMessage(
+          ChatRequest(
+            messages: _conversationPayload(),
+            tools: tools.toRequestJson(),
+          ),
+        );
+
+        if (!response.hasToolCalls) {
+          final content = response.content.trim();
+          if (content.isEmpty) {
+            throw AiException.badResponse('Groq returned an empty response.');
+          }
+          final assistantMessage = ChatMessage.assistant(content);
+          _messages.add(assistantMessage);
+          _completeTurn(content);
+          return assistantMessage;
+        }
+
+        _messages.add(
+          ChatMessage.assistantWithToolCalls(
+            response.toolCalls,
+            content: response.content,
+          ),
+        );
+
+        for (final call in response.toolCalls) {
+          _lastToolUses.add(call.name);
+          final tool = tools.byName(call.name);
+          final result = tool == null
+              ? const ToolResult.failure('That tool is not available.')
+              : await tool.execute(call.decodedArguments());
+          _messages.add(
+            ChatMessage.toolResult(
+              toolCallId: call.id,
+              toolName: call.name,
+              content: result.asToolMessageContent(),
+            ),
+          );
+        }
+      }
+
+      throw AiException.badResponse('The tool call limit was reached.');
+    } catch (error) {
+      _failTurn(error);
+      return null;
+    }
+  }
+
   /// Requests cancellation of an in-flight streaming response.
   ///
   /// Any text already received is kept and committed as Kitten's reply.
@@ -226,6 +324,7 @@ class ChatService extends ChangeNotifier {
     _messages.add(message);
     _lastError = null;
     _lastErrorType = null;
+    _lastToolUses = [];
     _cancelRequested = false;
     _assistantState = AssistantState.thinking;
     personality.onUserMessage(message.content);
@@ -238,15 +337,28 @@ class ChatService extends ChangeNotifier {
   /// only the most recent image-bearing message keeps its image; older ones
   /// become their text alone.
   List<ChatMessage> _conversationPayload() {
-    final systemPrompt = personality.buildSystemPrompt();
+    var systemPrompt = personality.buildSystemPrompt();
     final context = _promptContext?.call()?.trim();
 
+    final tools = toolRegistry;
+    if (tools != null && tools.isNotEmpty) {
+      // The tools array tells the model what exists; this tells it when to
+      // prefer a tool over guessing.
+      final listing = [
+        for (final tool in tools.all) '- ${tool.name}: ${tool.description}',
+      ].join('\n');
+      systemPrompt =
+          '$systemPrompt\n\nAVAILABLE TOOLS:\n$listing\n\n'
+          'Call a tool when it would give a better answer than guessing, and '
+          'say so plainly in your reply when you used one.';
+    }
+
+    final contextSection = context == null || context.isEmpty
+        ? null
+        : '$systemPrompt\n\n$context';
+
     final messages = [
-      ChatMessage.system(
-        context == null || context.isEmpty
-            ? systemPrompt
-            : '$systemPrompt\n\n$context',
-      ),
+      ChatMessage.system(contextSection ?? systemPrompt),
       ..._messages,
     ];
 

@@ -4,9 +4,17 @@ import 'package:flutter/material.dart';
 
 import 'package:kitten/core/ai/services/chat_service.dart';
 import 'package:kitten/core/awareness/services/app_awareness_controller.dart';
+import 'package:kitten/core/background/services/background_assistant_controller.dart';
 import 'package:kitten/core/constants/app_constants.dart';
 import 'package:kitten/core/models/assistant_state.dart';
+import 'package:kitten/core/overlay/models/overlay_app_context.dart';
+import 'package:kitten/core/overlay/services/floating_overlay_controller.dart';
+import 'package:kitten/core/phone/services/method_channel_phone_capability_service.dart';
 import 'package:kitten/core/screen/services/screen_understanding_controller.dart';
+import 'package:kitten/core/tools/built_in/get_current_app_tool.dart';
+import 'package:kitten/core/tools/built_in/get_current_time_tool.dart';
+import 'package:kitten/core/tools/built_in/phone_action_tools.dart';
+import 'package:kitten/core/tools/tool_registry.dart';
 import 'package:kitten/core/voice/config/voice_config.dart';
 import 'package:kitten/core/voice/services/voice_controller.dart';
 import 'package:kitten/features/home/presentation/widgets/chat_bubble.dart';
@@ -24,6 +32,8 @@ class HomePage extends StatefulWidget {
     this.voiceController,
     this.awarenessController,
     this.screenController,
+    this.overlayController,
+    this.backgroundAssistantController,
   });
 
   /// Optional injected [VoiceController] for testing and dependency injection.
@@ -37,6 +47,10 @@ class HomePage extends StatefulWidget {
   /// Optional injected [ScreenUnderstandingController] for testing.
   final ScreenUnderstandingController? screenController;
 
+  /// Optional injected overlay controller for testing and dependency injection.
+  final FloatingOverlayController? overlayController;
+  final BackgroundAssistantController? backgroundAssistantController;
+
   @override
   State<HomePage> createState() => _HomePageState();
 }
@@ -46,12 +60,20 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   late final ChatService _chatService;
   late final AppAwarenessController _awareness;
   late final ScreenUnderstandingController _screen;
+  late final FloatingOverlayController _overlay;
+  late final BackgroundAssistantController _backgroundAssistant;
+  StreamSubscription<String>? _backgroundCommandSubscription;
+  StreamSubscription<OverlayAppContext>? _overlayOpeningSubscription;
 
   /// The chat service we built ourselves, and so must dispose.
   ChatService? _ownedChatService;
 
   final TextEditingController _textController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
+
+  /// Focused after the floating Kitten hands a conversation over, so the reply
+  /// can be typed straight away.
+  final FocusNode _inputFocus = FocusNode();
 
   /// The last voice problem already shown, so it is not repeated.
   String? _shownVoiceError;
@@ -68,8 +90,20 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     if (widget.voiceController == null) {
       // Kitten's replies may mention the app the user was last using, so the
       // conversation is given a way to read that context.
+      final phoneService = MethodChannelPhoneCapabilityService();
+      final toolRegistry = ToolRegistry()
+        ..registerAll([
+          const GetCurrentTimeTool(),
+          GetCurrentAppTool(_awareness),
+          OpenDialerTool(phoneService),
+          ComposeMessageTool(phoneService),
+          SetAlarmTool(phoneService),
+          SetTimerTool(phoneService),
+          OpenAppTool(phoneService),
+        ]);
       final chatService = ChatService(
         contextProvider: _awareness.buildPromptContext,
+        toolRegistry: toolRegistry,
       );
       _ownedChatService = chatService;
       _voice = VoiceController(chatService: chatService);
@@ -80,9 +114,24 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     _voice.addListener(_onVoiceUpdate);
 
     // Screen understanding streams its answer into the same conversation.
-    _screen = widget.screenController ??
+    _screen =
+        widget.screenController ??
         ScreenUnderstandingController(chatService: _chatService);
     _screen.addListener(_onScreenUpdate);
+    _overlay = widget.overlayController ?? FloatingOverlayController();
+    _backgroundAssistant =
+        widget.backgroundAssistantController ?? BackgroundAssistantController();
+    _backgroundCommandSubscription = _backgroundAssistant.commands.listen(
+      _handleBackgroundCommand,
+    );
+    unawaited(_backgroundAssistant.refresh());
+
+    // The floating Kitten says what it can see and then hands that app over
+    // when it is tapped, so the conversation starts in context.
+    _overlayOpeningSubscription = _overlay.appOpenings.listen(
+      _handleOverlayAppOpening,
+    );
+    unawaited(_takePendingOverlayApp());
 
     WidgetsBinding.instance.addObserver(this);
 
@@ -105,6 +154,15 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     if (widget.voiceController == null) {
       _voice.dispose();
     }
+    if (widget.overlayController == null) {
+      _overlay.dispose();
+    }
+    _backgroundCommandSubscription?.cancel();
+    _overlayOpeningSubscription?.cancel();
+    _inputFocus.dispose();
+    if (widget.backgroundAssistantController == null) {
+      _backgroundAssistant.dispose();
+    }
     _ownedChatService?.dispose();
     _awareness.removeListener(_onAwarenessUpdate);
     if (widget.awarenessController == null) {
@@ -126,6 +184,9 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     if (state == AppLifecycleState.resumed) {
       unawaited(_voice.resume());
       unawaited(_awareness.resume());
+      // A tap on the floating cat brings Kitten forward, so anything it handed
+      // over before this frame is collected here.
+      unawaited(_takePendingOverlayApp());
     } else {
       unawaited(_voice.suspend());
       unawaited(_awareness.suspend());
@@ -278,6 +339,34 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     }
   }
 
+  /// Collects an app the overlay handed over before this page could listen.
+  Future<void> _takePendingOverlayApp() async {
+    final context = await _overlay.takePendingAppContext();
+    if (context != null) _handleOverlayAppOpening(context);
+  }
+
+  /// Opens the conversation already knowing which app the user came from.
+  ///
+  /// The line is the same one the floating Kitten showed, so the chat picks up
+  /// exactly where the bubble left off. It is seeded locally rather than sent
+  /// to the model, which would cost a request just to say hello.
+  void _handleOverlayAppOpening(OverlayAppContext context) {
+    if (!mounted) return;
+
+    final seeded = _chatService.seedAssistantMessage(context.openingLine);
+    if (seeded && !_voice.isActive) {
+      _inputFocus.requestFocus();
+      _scrollToBottom(animate: false);
+    }
+    setState(() {});
+  }
+
+  void _handleBackgroundCommand(String command) {
+    if (!mounted) return;
+    _textController.text = command;
+    unawaited(_handleSendMessage());
+  }
+
   void _showErrorSnackBar(String message) {
     final cs = Theme.of(context).colorScheme;
 
@@ -305,6 +394,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         builder: (_) => SettingsPage(
           voiceController: _voice,
           awarenessController: _awareness,
+          overlayController: _overlay,
+          backgroundAssistantController: _backgroundAssistant,
         ),
       ),
     );
@@ -342,7 +433,9 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                     IconButton(
                       icon: const Icon(Icons.refresh_outlined),
                       tooltip: 'Clear Chat',
-                      onPressed: isThinking ? null : _chatService.clearConversation,
+                      onPressed: isThinking
+                          ? null
+                          : _chatService.clearConversation,
                     ),
                   IconButton(
                     icon: const Icon(Icons.settings_outlined),
@@ -383,9 +476,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                   const SizedBox(height: 4),
                   Text(
                     AppConstants.kittenPrompt,
-                    style: tt.bodySmall?.copyWith(
-                      color: cs.onSurfaceVariant,
-                    ),
+                    style: tt.bodySmall?.copyWith(color: cs.onSurfaceVariant),
                     textAlign: TextAlign.center,
                   ),
                   const SizedBox(height: 12),
@@ -506,7 +597,10 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                             CircleAvatar(
                               radius: 14,
                               backgroundColor: cs.primaryContainer,
-                              child: const Text('🐱', style: TextStyle(fontSize: 14)),
+                              child: const Text(
+                                '🐱',
+                                style: TextStyle(fontSize: 14),
+                              ),
                             ),
                             const SizedBox(width: 10),
                             Container(
@@ -555,9 +649,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
               decoration: BoxDecoration(
                 color: cs.surface,
                 border: Border(
-                  top: BorderSide(
-                    color: cs.outlineVariant.withAlpha(80),
-                  ),
+                  top: BorderSide(color: cs.outlineVariant.withAlpha(80)),
                 ),
               ),
               child: SafeArea(
@@ -567,6 +659,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                     Expanded(
                       child: TextField(
                         controller: _textController,
+                        focusNode: _inputFocus,
                         textCapitalization: TextCapitalization.sentences,
                         enabled: !isThinking,
                         decoration: InputDecoration(
@@ -592,7 +685,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                     ),
                     const SizedBox(width: 8),
                     IconButton(
-                      onPressed: (_isBusy ||
+                      onPressed:
+                          (_isBusy ||
                               _screen.isCapturing ||
                               !_screen.isSupported)
                           ? null
@@ -616,15 +710,15 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                       icon: isStreaming
                           ? const Icon(Icons.stop, size: 20)
                           : (isThinking
-                              ? const SizedBox(
-                                  width: 18,
-                                  height: 18,
-                                  child: CircularProgressIndicator(
-                                    strokeWidth: 2,
-                                    color: Colors.white,
-                                  ),
-                                )
-                              : const Icon(Icons.send, size: 20)),
+                                ? const SizedBox(
+                                    width: 18,
+                                    height: 18,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                      color: Colors.white,
+                                    ),
+                                  )
+                                : const Icon(Icons.send, size: 20)),
                       tooltip: isStreaming ? 'Stop response' : 'Send message',
                     ),
                   ],

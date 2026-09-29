@@ -20,21 +20,28 @@ import 'package:kitten/core/services/secure_storage_service.dart';
 /// and the foreground service it requires have no host-side stand-in.
 ///
 /// Before running them, pre-approve the consent dialog so the capture is not
-/// waiting on a system prompt nothing can tap:
-///   adb shell appops set com.example.kitten android:media_projection allow
+/// waiting on a system prompt nothing can tap. The app-op is `PROJECT_MEDIA`;
+/// the `android:media_projection` spelling is not an app-op and is rejected:
+///   adb shell appops set com.example.kitten PROJECT_MEDIA allow
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
 
   group('screen understanding on device', () {
-    testWidgets('captures a real screenshot and hands back JPEG bytes',
-        (tester) async {
+    testWidgets('captures a real screenshot and hands back JPEG bytes', (
+      tester,
+    ) async {
       final capture = MethodChannelScreenCaptureService();
 
       expect(capture.isSupported, isTrue);
 
       final base64Jpeg = await capture.captureScreen();
-      expect(base64Jpeg, isNotNull, reason: 'check that the media projection '
-          'app-op is granted');
+      expect(
+        base64Jpeg,
+        isNotNull,
+        reason:
+            'check that the media projection '
+            'app-op is granted',
+      );
 
       final bytes = base64Decode(base64Jpeg!);
       expect(bytes.length, greaterThan(1000));
@@ -46,7 +53,9 @@ void main() {
       debugPrint('captured ${bytes.length} bytes of screen');
     });
 
-    testWidgets('the privacy note appears before the first read', (tester) async {
+    testWidgets('the privacy note appears before the first read', (
+      tester,
+    ) async {
       await tester.pumpWidget(const KittenApp());
       await tester.pump(const Duration(milliseconds: 500));
 
@@ -71,6 +80,14 @@ void main() {
 
     testWidgets('a real screenshot reaches Kitten end to end', (tester) async {
       final storage = SecureStorageService();
+      // A key passed at run time keeps the secret out of the repository:
+      //   flutter test integration_test -d <device> \
+      //     --dart-define=GROQ_API_KEY=gsk_...
+      // It is written to this run's encrypted storage only.
+      const injectedKey = String.fromEnvironment('GROQ_API_KEY');
+      if (injectedKey.isNotEmpty) {
+        await storage.saveGroqApiKey(injectedKey);
+      }
       final apiKey = await storage.getGroqApiKey();
       if (apiKey == null || apiKey.isEmpty) {
         markTestSkipped('no Groq API key configured on this device');
@@ -104,8 +121,9 @@ void main() {
       chatService.dispose();
     });
 
-    testWidgets('the vision model is asked instead of the text model',
-        (tester) async {
+    testWidgets('the vision model is asked instead of the text model', (
+      tester,
+    ) async {
       final provider = _CapturingProvider();
       final chatService = ChatService(provider: provider);
       final controller = ScreenUnderstandingController(
@@ -133,7 +151,7 @@ class _TinyCapture implements ScreenCaptureService {
 
   @override
   Future<String?> captureScreen() async =>
-      '/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAP//';  
+      '/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAP//';
 
   @override
   void dispose() {}

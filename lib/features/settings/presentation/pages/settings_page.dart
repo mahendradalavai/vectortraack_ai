@@ -4,8 +4,11 @@ import 'package:flutter/material.dart';
 
 import 'package:kitten/core/ai/config/ai_config.dart';
 import 'package:kitten/core/awareness/services/app_awareness_controller.dart';
+import 'package:kitten/core/background/services/background_assistant_controller.dart';
 import 'package:kitten/core/ai/models/ai_exception.dart';
 import 'package:kitten/core/ai/providers/groq_provider.dart';
+import 'package:kitten/core/overlay/services/floating_overlay_controller.dart';
+import 'package:kitten/core/permissions/services/microphone_permission_service.dart';
 import 'package:kitten/core/services/secure_storage_service.dart';
 import 'package:kitten/core/voice/config/voice_config.dart';
 import 'package:kitten/core/voice/services/voice_controller.dart';
@@ -21,6 +24,8 @@ class SettingsPage extends StatefulWidget {
     this.groqProvider,
     this.voiceController,
     this.awarenessController,
+    this.overlayController,
+    this.backgroundAssistantController,
   });
 
   final SecureStorageService? secureStorage;
@@ -33,14 +38,22 @@ class SettingsPage extends StatefulWidget {
   /// The live app-awareness session, for the same reason.
   final AppAwarenessController? awarenessController;
 
+  /// The live floating overlay session, when one exists.
+  final FloatingOverlayController? overlayController;
+  final BackgroundAssistantController? backgroundAssistantController;
+
   @override
   State<SettingsPage> createState() => _SettingsPageState();
 }
 
-class _SettingsPageState extends State<SettingsPage> with WidgetsBindingObserver {
+class _SettingsPageState extends State<SettingsPage>
+    with WidgetsBindingObserver {
   late final SecureStorageService _storage;
   late final GroqProvider _groqProvider;
   late final AppAwarenessController _awareness;
+  late final FloatingOverlayController _overlay;
+  late final MicrophonePermissionService _microphone;
+  late final BackgroundAssistantController _backgroundAssistant;
 
   bool _isLoading = true;
   String _maskedApiKey = 'Not configured';
@@ -57,18 +70,30 @@ class _SettingsPageState extends State<SettingsPage> with WidgetsBindingObserver
   /// True while the user has been sent to grant usage access, so returning to
   /// the app can finish what they started.
   bool _awaitingUsageAccess = false;
+  bool _awaitingOverlayPermission = false;
+  bool _microphoneGranted = false;
 
   @override
   void initState() {
     super.initState();
     _storage = widget.secureStorage ?? SecureStorageService();
-    _groqProvider = widget.groqProvider ?? GroqProvider(secureStorage: _storage);
+    _groqProvider =
+        widget.groqProvider ?? GroqProvider(secureStorage: _storage);
     _awareness = widget.awarenessController ?? AppAwarenessController();
     _awareness.addListener(_onAwarenessUpdate);
+    _overlay = widget.overlayController ?? FloatingOverlayController();
+    _overlay.addListener(_onOverlayUpdate);
+    _microphone = MicrophonePermissionService();
+    _backgroundAssistant =
+        widget.backgroundAssistantController ?? BackgroundAssistantController();
+    _backgroundAssistant.addListener(_onBackgroundAssistantUpdate);
     WidgetsBinding.instance.addObserver(this);
     // Asks the platform about usage access and repaints when it answers, so
     // the rest of the screen never waits on it.
     unawaited(_awareness.refreshPermission());
+    unawaited(_overlay.refresh());
+    unawaited(_backgroundAssistant.refresh());
+    unawaited(_refreshMicrophonePermission());
     _loadSettings();
   }
 
@@ -78,6 +103,14 @@ class _SettingsPageState extends State<SettingsPage> with WidgetsBindingObserver
     _awareness.removeListener(_onAwarenessUpdate);
     if (widget.awarenessController == null) {
       _awareness.dispose();
+    }
+    _overlay.removeListener(_onOverlayUpdate);
+    if (widget.overlayController == null) {
+      _overlay.dispose();
+    }
+    _backgroundAssistant.removeListener(_onBackgroundAssistantUpdate);
+    if (widget.backgroundAssistantController == null) {
+      _backgroundAssistant.dispose();
     }
     // Only close the provider we created ourselves; an injected one is owned
     // by the caller.
@@ -95,10 +128,96 @@ class _SettingsPageState extends State<SettingsPage> with WidgetsBindingObserver
     if (_awaitingUsageAccess && !_awareness.enabled) {
       unawaited(_finishUsageAccessGrant());
     }
+    if (_awaitingOverlayPermission) {
+      unawaited(_refreshOverlayAfterSettings());
+    }
+    unawaited(_refreshMicrophonePermission());
   }
 
   void _onAwarenessUpdate() {
     if (mounted) setState(() {});
+  }
+
+  void _onOverlayUpdate() {
+    if (mounted) setState(() {});
+  }
+
+  void _onBackgroundAssistantUpdate() {
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _refreshMicrophonePermission() async {
+    final granted = await _microphone.isGranted();
+    if (mounted) setState(() => _microphoneGranted = granted);
+  }
+
+  Future<void> _openMicrophoneSettings() async {
+    final opened = await _microphone.openSettings();
+    if (!opened && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Microphone settings could not be opened.'),
+        ),
+      );
+    }
+  }
+
+  Future<void> _changeBackgroundAssistant(bool enabled) async {
+    final changed = await _backgroundAssistant.setEnabled(enabled);
+    if (!mounted || changed) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          _backgroundAssistant.lastError ??
+              'Background listening could not be changed.',
+        ),
+      ),
+    );
+  }
+
+  String _floatingOverlaySubtitle() {
+    if (!_overlay.isSupported) return 'Only available on Android';
+    if (!_overlay.hasPermission) {
+      return 'Off — grant permission to draw Kitten above other apps';
+    }
+    if (_overlay.isRunning) return 'On — Kitten is available above other apps';
+    return 'Off — start Kitten when you want the overlay';
+  }
+
+  Future<void> _refreshOverlayAfterSettings() async {
+    await _overlay.refresh();
+    if (mounted) setState(() => _awaitingOverlayPermission = false);
+  }
+
+  Future<void> _openOverlaySettings() async {
+    final opened = await _overlay.openOverlaySettings();
+    if (!mounted) return;
+    setState(() => _awaitingOverlayPermission = opened);
+    if (!opened) _showOverlayError();
+  }
+
+  Future<void> _changeFloatingOverlay(bool enabled) async {
+    if (enabled) {
+      final started = await _overlay.start();
+      if (!mounted) return;
+      if (!started) {
+        _showOverlayError();
+        if (!_overlay.hasPermission) {
+          await _openOverlaySettings();
+        }
+      }
+      return;
+    }
+
+    final stopped = await _overlay.stop();
+    if (mounted && !stopped) _showOverlayError();
+  }
+
+  void _showOverlayError() {
+    final message = _overlay.lastError ?? 'Floating Kitten action failed.';
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message), duration: const Duration(seconds: 3)),
+    );
   }
 
   Future<void> _loadSettings() async {
@@ -111,7 +230,8 @@ class _SettingsPageState extends State<SettingsPage> with WidgetsBindingObserver
       setState(() {
         _hasApiKey = key != null && key.isNotEmpty;
         _maskedApiKey = SecureStorageService.maskApiKey(key);
-        _selectedModel = (model != null &&
+        _selectedModel =
+            (model != null &&
                 model.isNotEmpty &&
                 AiConfig.availableModels.contains(model))
             ? model
@@ -178,7 +298,9 @@ class _SettingsPageState extends State<SettingsPage> with WidgetsBindingObserver
     if (enabled) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Usage access granted. Kitten can see the app you use.'),
+          content: Text(
+            'Usage access granted. Kitten can see the app you use.',
+          ),
           duration: Duration(seconds: 3),
         ),
       );
@@ -368,8 +490,7 @@ class _SettingsPageState extends State<SettingsPage> with WidgetsBindingObserver
       if (mounted) {
         setState(() {
           _connectionSuccess = false;
-          _connectionStatusMessage =
-              'Connection test failed. Please verify your internet and API key.';
+          _connectionStatusMessage = 'Connection test failed. Please verify your internet and API key.';
         });
       }
     } finally {
@@ -472,7 +593,9 @@ class _SettingsPageState extends State<SettingsPage> with WidgetsBindingObserver
                           onPressed: _removeApiKey,
                         ),
                       IconButton(
-                        icon: Icon(_hasApiKey ? Icons.edit_outlined : Icons.add),
+                        icon: Icon(
+                          _hasApiKey ? Icons.edit_outlined : Icons.add,
+                        ),
                         tooltip: _hasApiKey ? 'Change Key' : 'Add Key',
                         onPressed: _showApiKeyDialog,
                       ),
@@ -571,11 +694,24 @@ class _SettingsPageState extends State<SettingsPage> with WidgetsBindingObserver
                   subtitle: Text(
                     _wakeWordEnabled
                         ? 'Waiting for "${VoiceConfig.wakePhrases.first}" — '
-                            'listening while the app is open'
+                              'listening while the app is open'
                         : 'Off — enable to wake Kitten by voice',
                   ),
                   value: _wakeWordEnabled,
                   onChanged: _changeWakeWord,
+                ),
+                SwitchListTile(
+                  secondary: const Icon(Icons.mic_external_on_outlined),
+                  title: const Text('Background Assistant'),
+                  subtitle: Text(
+                    _backgroundAssistant.enabled
+                        ? 'Listening for “Hey Kitty” with a persistent notification'
+                        : 'Off — Kitten listens only when you start Talk',
+                  ),
+                  value: _backgroundAssistant.enabled,
+                  onChanged: !_backgroundAssistant.isSupported
+                      ? null
+                      : _changeBackgroundAssistant,
                 ),
                 SwitchListTile(
                   secondary: const Icon(Icons.graphic_eq),
@@ -607,21 +743,98 @@ class _SettingsPageState extends State<SettingsPage> with WidgetsBindingObserver
 
                 const Divider(height: 32),
 
-                // ── Permissions (Placeholders) ─────────────────
+                // ── Floating Kitten ───────────────────────────
+                _SectionHeader(
+                  title: 'Floating Kitten',
+                  colorScheme: cs,
+                  textTheme: tt,
+                ),
+                SwitchListTile(
+                  secondary: const Icon(Icons.pets_outlined),
+                  title: const Text('Floating Kitten'),
+                  subtitle: Text(_floatingOverlaySubtitle()),
+                  value: _overlay.isRunning,
+                  onChanged: !_overlay.isSupported || !_overlay.hasPermission
+                      ? null
+                      : _changeFloatingOverlay,
+                ),
+                ListTile(
+                  leading: const Icon(Icons.layers_outlined),
+                  title: const Text('Overlay permission'),
+                  subtitle: Text(
+                    !_overlay.isSupported
+                        ? 'Only available on Android'
+                        : (_overlay.hasPermission ? 'Granted' : 'Not granted'),
+                  ),
+                  trailing: !_overlay.isSupported
+                      ? null
+                      : (_overlay.hasPermission
+                            ? const Icon(Icons.check_circle_outline)
+                            : TextButton(
+                                onPressed: _openOverlaySettings,
+                                child: const Text('Grant'),
+                              )),
+                  onTap: _overlay.isSupported ? _openOverlaySettings : null,
+                ),
+                if (_overlay.isSupported && _overlay.hasPermission)
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            onPressed: _overlay.isRunning
+                                ? null
+                                : () => _changeFloatingOverlay(true),
+                            icon: const Icon(Icons.open_in_new),
+                            label: const Text('Start Floating Kitten'),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            onPressed: _overlay.isRunning
+                                ? () => _changeFloatingOverlay(false)
+                                : null,
+                            icon: const Icon(Icons.close),
+                            label: const Text('Stop Floating Kitten'),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+
+                const Divider(height: 32),
+
+                // ── Permissions ───────────────────────────────
                 _SectionHeader(
                   title: 'Permissions',
                   colorScheme: cs,
                   textTheme: tt,
                 ),
-                _PlaceholderTile(
-                  icon: Icons.mic_none,
-                  title: 'Microphone',
-                  subtitle: 'Not granted',
+                ListTile(
+                  leading: const Icon(Icons.mic_none),
+                  title: const Text('Microphone'),
+                  subtitle: Text(
+                    _microphoneGranted
+                        ? 'Granted — voice and background listening can use it'
+                        : 'Not granted — required for Talk and Background Assistant',
+                  ),
+                  trailing: _microphoneGranted
+                      ? const Icon(Icons.check_circle_outline)
+                      : TextButton(
+                          onPressed: _openMicrophoneSettings,
+                          child: const Text('Grant'),
+                        ),
+                  onTap: _openMicrophoneSettings,
                 ),
-                _PlaceholderTile(
-                  icon: Icons.screen_search_desktop_outlined,
-                  title: 'Screen Understanding',
-                  subtitle: 'Not granted',
+                ListTile(
+                  leading: const Icon(Icons.screen_search_desktop_outlined),
+                  title: const Text('Screen Understanding'),
+                  subtitle: const Text(
+                    'Consent is requested each time you press Read screen',
+                  ),
+                  trailing: const Icon(Icons.info_outline),
                 ),
                 ListTile(
                   leading: const Icon(Icons.query_stats_outlined),
@@ -630,11 +843,10 @@ class _SettingsPageState extends State<SettingsPage> with WidgetsBindingObserver
                     !_awareness.isSupported
                         ? 'Only available on Android'
                         : (_awareness.hasUsageAccess
-                            ? 'Granted'
-                            : 'Not granted'),
+                              ? 'Granted'
+                              : 'Not granted'),
                   ),
-                  trailing: _awareness.isSupported &&
-                          !_awareness.hasUsageAccess
+                  trailing: _awareness.isSupported && !_awareness.hasUsageAccess
                       ? TextButton(
                           onPressed: _openUsageAccessSettings,
                           child: const Text('Grant'),

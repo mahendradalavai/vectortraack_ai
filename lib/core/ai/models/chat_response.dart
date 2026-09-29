@@ -1,8 +1,11 @@
+import 'package:kitten/core/tools/models/tool_call.dart';
+
 /// Encapsulates the response from an AI provider chat completion.
 class ChatResponse {
   const ChatResponse({
     required this.content,
     required this.model,
+    this.toolCalls = const [],
     this.finishReason,
     this.promptTokens,
     this.completionTokens,
@@ -21,6 +24,14 @@ class ChatResponse {
     final finishReason = firstChoice['finish_reason'] as String?;
     final model = json['model'] as String? ?? 'unknown';
 
+    final rawCalls = message?['tool_calls'] as List<dynamic>?;
+    final toolCalls = rawCalls == null
+        ? const <ToolCall>[]
+        : [
+            for (final call in rawCalls)
+              if (call is Map<String, dynamic>) ToolCall.fromGroqJson(call),
+          ];
+
     final usage = json['usage'] as Map<String, dynamic>?;
     final promptTokens = usage?['prompt_tokens'] as int?;
     final completionTokens = usage?['completion_tokens'] as int?;
@@ -29,6 +40,7 @@ class ChatResponse {
     return ChatResponse(
       content: content.trim(),
       model: model,
+      toolCalls: toolCalls,
       finishReason: finishReason,
       promptTokens: promptTokens,
       completionTokens: completionTokens,
@@ -38,6 +50,12 @@ class ChatResponse {
 
   final String content;
   final String model;
+
+  /// The tool calls the model asked for, empty for a plain text answer.
+  final List<ToolCall> toolCalls;
+
+  /// Whether this response wants tools run rather than being shown as text.
+  bool get hasToolCalls => toolCalls.isNotEmpty;
   final String? finishReason;
   final int? promptTokens;
   final int? completionTokens;
