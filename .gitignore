@@ -31,8 +31,3 @@ uploads/
 results/
 .freebuff/
 
-
-# Large data directories
-dataset/
-videos/
-images/
